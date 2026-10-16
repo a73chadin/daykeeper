@@ -80,7 +80,9 @@ jobs:
         run: python -m pip install --require-hashes -r requirements-build.txt
 
       - name: Tests
-        run: python -m unittest discover tests
+        # a test that hangs stops here with the stacks printed, not at the job's six hours
+        timeout-minutes: 15
+        run: python -X faulthandler -c "import faulthandler, sys, unittest; faulthandler.dump_traceback_later(600, exit=True); sys.argv = ['unittest', 'discover', '-v', 'tests']; unittest.main(module=None)"
 
       - name: Build app bundle
         run: |
