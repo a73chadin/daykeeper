@@ -3,6 +3,7 @@ the dark tab bar, the settings window — installed once on the root window."""
 
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from tkinter import font as tkfont, ttk
 
@@ -188,7 +189,9 @@ def install(root: tk.Tk) -> theme.Painter:
     rounded("NavActive.TButton", 9, (RAIL_ACTIVE, None), (RAIL_ACTIVE, None), (RAIL_ACTIVE, None))
     style.configure("NavActive.TButton", foreground=ON_ACCENT, anchor="center", padding=(10, 7), font=(FONT, pt(11), "bold"), background=RAIL)
     rounded("NavIcon.TButton", 9, none, (RAIL_HOVER, None), (RAIL_HOVER, None), none)  # disabled (undo with nothing to undo): just dimmer
-    style.configure("NavIcon.TButton", foreground=RAIL_TEXT, padding=(9, 7), width=2, font=(FONT, pt(12)), background=RAIL)
+    # macOS has no ⚙ ↶ ↷ ⏻ in its UI font and draws them small from a fallback one
+    icon_size = 16 if sys.platform == "darwin" else 12
+    style.configure("NavIcon.TButton", foreground=RAIL_TEXT, padding=(9, 7), width=2, font=(FONT, pt(icon_size)), background=RAIL)
     style.map("NavIcon.TButton", foreground=[("disabled", RAIL_HOVER), ("active", ON_ACCENT)], background=[("disabled", RAIL)])
 
     rounded("Toggle.Toolbutton", 7, none, (HOVER, None), (PRESSED, None))
