@@ -1,0 +1,5 @@
+"""Daykeeper: passwords, bookmarks, a work journal, notes, routines and GitLab news in one
+encrypted file."""
+
+__version__ = "1.1.0"
+RELEASES_URL = "https://github.com/achadin-ru/daykeeper/releases"

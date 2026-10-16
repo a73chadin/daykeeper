@@ -1,0 +1,5 @@
+# Lint and type checks (pyproject.toml): ruff and mypy. Exact versions; the lint job
+# builds nothing, so these are not part of the hashed build set.
+-r requirements.txt
+ruff==0.17.1
+mypy==2.4.0

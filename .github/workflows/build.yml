@@ -1,0 +1,124 @@
+name: build
+
+# Actions are pinned to commit hashes (the tag in the comment is what the hash was when
+# pinned): a moved or hijacked tag cannot change what runs here. Python packages come from
+# requirements-build.txt with exact versions and hashes (--require-hashes).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    # ruff over everything, mypy over the pure modules (pyproject.toml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Ruff
+        run: python -m ruff check .
+
+      - name: Mypy
+        run: python -m mypy
+
+  windows:
+    needs: lint
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        run: python -m pip install --require-hashes -r requirements-build.txt
+
+      - name: Tests
+        run: python -X utf8 -m unittest discover tests
+
+      - name: Build exe
+        # The console helper first (the Claude Code hook and the journal commands, a folder:
+        # it starts three times faster than one file), then the app that carries it.
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --console --noupx --name daykeeper-cli --exclude-module tkinter --exclude-module cryptography --exclude-module argon2 cli_main.py
+          if ($LASTEXITCODE) { exit 1 }
+          Set-Content -NoNewline -Encoding ascii dist/daykeeper-cli/build-id.txt "${{ github.sha }}"
+          python -m PyInstaller --noconfirm --clean --onefile --noconsole --noupx --name Daykeeper --add-data "dist/daykeeper-cli;daykeeper-cli" main.py
+          if ($LASTEXITCODE) { exit 1 }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Daykeeper-windows
+          path: dist/Daykeeper.exe
+
+  macos:
+    needs: lint
+    # Apple Silicon build (GitHub's current macOS runners are arm64). The app is not
+    # signed: on the first start use right-click -> Open, or remove the quarantine flag
+    # (see README).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        run: python -m pip install --require-hashes -r requirements-build.txt
+
+      - name: Tests
+        run: python -m unittest discover tests
+
+      - name: Build app bundle
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --noupx --name Daykeeper \
+            --osx-bundle-identifier ru.achadin.daykeeper main.py
+          ditto -c -k --sequesterRsrc --keepParent dist/Daykeeper.app dist/Daykeeper-macos.zip
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Daykeeper-macos
+          path: dist/Daykeeper-macos.zip
+
+  release:
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Checksums
+        run: |
+          mkdir out
+          cp artifacts/Daykeeper-windows/Daykeeper.exe artifacts/Daykeeper-macos/Daykeeper-macos.zip out/
+          cd out
+          sha256sum Daykeeper.exe Daykeeper-macos.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: |
+            out/Daykeeper.exe
+            out/Daykeeper-macos.zip
+            out/SHA256SUMS.txt
+          body_path: CHANGELOG.md
+          generate_release_notes: true

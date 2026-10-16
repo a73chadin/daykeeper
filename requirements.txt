@@ -1,0 +1,2 @@
+# What the app needs to run from source; the same version as the build (requirements-build.txt).
+cryptography==50.0.2

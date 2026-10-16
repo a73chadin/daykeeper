@@ -1,0 +1,44 @@
+# Lint and type checks: `ruff check .` and `mypy`; CI runs both before the tests.
+# Install with: python -m pip install -r requirements-dev.txt
+
+[tool.ruff]
+target-version = "py313"
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, bugbear, bandit (security), pyupgrade, simplify
+select = ["E", "W", "F", "B", "S", "UP", "SIM"]
+ignore = [
+    "E501",    # long lines are the house style: one statement, one line; the formatter is not used
+    "SIM105",  # try/except/pass reads plainer here than contextlib.suppress
+    "SIM108",  # a ternary is not always clearer than an if
+]
+
+[tool.ruff.lint.per-file-ignores]
+# tests: asserts, made-up passwords and temp paths, a Python child process
+"tests/**" = ["S101", "S105", "S106", "S107", "S108", "S603"]
+
+[tool.mypy]
+python_version = "3.13"
+# the pure modules: the models, the formats, the parsers. The window (tkinter) is checked
+# by its tests and the smoke run.
+files = [
+    "daykeeper/vault.py",
+    "daykeeper/security.py",
+    "daykeeper/journal.py",
+    "daykeeper/journal_layout.py",
+    "daykeeper/hookrules.py",
+    "daykeeper/gitlab.py",
+    "daykeeper/siteicon.py",
+    "daykeeper/routines.py",
+    "daykeeper/cli.py",
+    "daykeeper/session.py",
+    "daykeeper/notes.py",
+    "daykeeper/bookmarks.py",
+    "daykeeper/envimport.py",
+    "daykeeper/errlog.py",
+    "daykeeper/settings.py",
+]
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true
