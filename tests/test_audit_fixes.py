@@ -485,7 +485,7 @@ class AppLockTest(unittest.TestCase):
         self.app.update()
         self.assertEqual(len({b.winfo_y() for b in buttons}), 2, "narrow: two lines")
         for b in buttons:
-            self.assertEqual(b.winfo_manager(), "pack", "every button is placed")
+            self.assertEqual(b.winfo_manager(), "place", "every button is placed")
             self.assertLessEqual(b.winfo_rootx() + b.winfo_width(), row.winfo_rootx() + row.winfo_width(), "nothing past the edge")
         row.destroy()
 

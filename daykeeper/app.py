@@ -162,7 +162,11 @@ class App(tk.Tk):
     # ------------------------------------------------------------------ style
 
     def _start_dpi(self) -> int:
-        """The DPI of the monitor the window opens on: where it was left, else the main one."""
+        """The DPI of the monitor the window opens on: where it was left, else the main one.
+        Tk on macOS says 72 for every screen: a point would be a pixel there, and the text a
+        quarter smaller than the boxes and gaps drawn round it, so it counts as 96 like Windows."""
+        if sys.platform == "darwin":
+            return 96
         geometry = str(self.session.settings().get("geometry") or "")
         m = re.search(r"x\d+\+?(-?\d+)\+?(-?\d+)$", geometry)  # 1200x760+-2600+200
         point = (int(m.group(1)) + 100, int(m.group(2)) + 100) if m else (0, 0)

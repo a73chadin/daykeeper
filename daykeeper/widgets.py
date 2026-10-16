@@ -297,59 +297,69 @@ class WrapLine(tk.Text):
 class FlowRow(ttk.Frame):
     """A row of widgets that goes on to the next line when the width runs out, instead of
     cutting the last ones off. The widgets are children of the row, put in with `add`
-    in their order; `side="right"` ones keep to the right edge of their line."""
+    in their order; `side="right"` ones keep to the right edge of their line. They are
+    placed by coordinates: packing them into line frames (not their parent) crashed Tk on
+    macOS."""
 
     def __init__(self, master: tk.Misc, gap: int = 6, **kw):
         super().__init__(master, **kw)
         self._gap = gap
         self._items: list[tuple[tk.Widget, tuple[int, int], str]] = []
-        self._lines: list[ttk.Frame] = []
-        self._shape: list[int] = []  # how many items each line holds now
+        self._placed: tuple = ()  # what the last layout was made for
         self.bind("<Configure>", lambda _e: self.reflow(), add="+")
 
     def add(self, widget: tk.Widget, padx: tuple[int, int] = (0, 0), side: str = "left") -> None:
         self._items.append((widget, padx, side))
-        self._shape = []
         widget.bind("<Configure>", lambda _e: self.reflow(), add="+")  # its text changed width
         self.reflow()
 
-    def _room(self) -> int:
-        width = self.winfo_width()
-        if width <= 1:
-            return 1 << 30  # not laid out yet: one line, the first <Configure> wraps it
+    def _padding(self) -> tuple[int, int, int, int]:
         raw = self.cget("padding")
         pad = [int(float(str(p))) for p in (raw if isinstance(raw, (tuple, list)) else str(raw).split())] or [0]
-        left, right = pad[0], pad[2] if len(pad) > 2 else pad[0]
-        return width - left - right
+        while len(pad) < 4:
+            pad.append(pad[len(pad) - 2] if len(pad) >= 2 else pad[0])  # Tk's rule: left, top, right, bottom
+        return pad[0], pad[1], pad[2], pad[3]
 
     def reflow(self) -> None:
-        room, shape, used = self._room(), [], 0
-        for widget, (left, right), _side in self._items:
-            need = widget.winfo_reqwidth() + left + right
-            if shape and used + need <= room:
-                shape[-1] += 1
+        left_pad, top_pad, right_pad, bottom_pad = self._padding()
+        width = self.winfo_width()
+        room = width - left_pad - right_pad if width > 1 else 1 << 30  # not laid out yet: one line
+        sizes = [(w.winfo_reqwidth(), w.winfo_reqheight()) for w, _p, _s in self._items]
+        key = (room, tuple(sizes))
+        if key == self._placed:
+            return
+        self._placed = key
+        lines: list[list[int]] = []
+        used = 0
+        for i, (_widget, (pl, pr), _side) in enumerate(self._items):
+            need = sizes[i][0] + pl + pr
+            if lines and used + need <= room:
+                lines[-1].append(i)
                 used += need
             else:
-                shape.append(1)
-                used = need - left  # a line does not start with a gap
-        if shape == self._shape:
-            return
-        self._shape = shape
-        style = str(self.cget("style")) or "TFrame"
-        while len(self._lines) < len(shape):
-            self._lines.append(ttk.Frame(self, style=style))
-        for widget, _padx, _side in self._items:
-            widget.pack_forget()
-        first = 0
-        for n, line in enumerate(self._lines):
-            if n >= len(shape):
-                line.pack_forget()
-                continue
-            line.pack(fill="x", pady=(0 if n == 0 else self._gap, 0))
-            for i, (widget, (left, right), side) in enumerate(self._items[first:first + shape[n]]):
-                widget.pack(in_=line, side=side, padx=(0 if i == 0 and side == "left" else left, right))
-                widget.lift(line)  # the line frame is made later and would cover it
-            first += shape[n]
+                lines.append([i])
+                used = need - pl  # a line does not start with a gap
+        y = 0  # placed inside the padding already: its origin is the padding's corner
+        for n, line in enumerate(lines):
+            if n:
+                y += self._gap
+            height = max(sizes[i][1] for i in line)
+            x_left, x_right = 0, (room if width > 1 else used)
+            for k, i in enumerate(line):
+                widget, (pl, pr), side = self._items[i]
+                w, h = sizes[i]
+                if side == "right":
+                    x_right -= pr + w
+                    x = x_right
+                    x_right -= pl
+                else:
+                    x_left += 0 if k == 0 else pl
+                    x = x_left
+                    x_left += w + pr
+                widget.place(x=x, y=y + (height - h) // 2)
+            y += height
+        widest = max((sizes[i][0] + pl + pr for i, (_w, (pl, pr), _s) in enumerate(self._items)), default=0)
+        self.configure(width=widest + left_pad + right_pad, height=y + top_pad + bottom_pad)  # placed widgets ask nothing of the row
 
 
 class TextField(RoundText):
