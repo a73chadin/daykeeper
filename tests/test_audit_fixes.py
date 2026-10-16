@@ -470,6 +470,25 @@ class AppLockTest(unittest.TestCase):
         self.assertFalse(viewer.winfo_exists())
         self.assertEqual(note.read_text(encoding="utf-8"), "# new text")
 
+    def test_a_row_of_buttons_wraps_instead_of_cutting_the_last_ones(self):
+        from tkinter import ttk
+
+        from daykeeper.widgets import FlowRow
+        row = FlowRow(self.app)
+        buttons = [ttk.Button(row, text=f"Button number {i}") for i in range(4)]
+        for b in buttons:
+            row.add(b, padx=(8, 0))
+        row.place(x=0, y=0, width=2000)
+        self.app.update()
+        self.assertEqual(len({b.winfo_y() for b in buttons}), 1, "wide: one line")
+        row.place_configure(width=buttons[0].winfo_reqwidth() * 2 + 20)
+        self.app.update()
+        self.assertEqual(len({b.winfo_y() for b in buttons}), 2, "narrow: two lines")
+        for b in buttons:
+            self.assertEqual(b.winfo_manager(), "pack", "every button is placed")
+            self.assertLessEqual(b.winfo_rootx() + b.winfo_width(), row.winfo_rootx() + row.winfo_width(), "nothing past the edge")
+        row.destroy()
+
     def test_a_long_checklist_item_wraps_and_stays_one_line_of_text(self):
         from daykeeper.widgets import WrapLine
         seen = []

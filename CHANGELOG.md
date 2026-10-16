@@ -49,6 +49,9 @@
 - Integrations → GitLab → Projects: tick the projects to watch; none ticked — all of them.
 - Long text wraps instead of running past the edge: checklist items in notes and the
   lines of the journal report (the copied report keeps its lines as they are).
+- A narrow or short window keeps everything in view: the sidebar buttons stay at the
+  bottom, the Passwords sidebar narrows and a field's name goes above its value, the rows
+  of buttons in the Journal and the GitLab settings wrap onto the next line.
 - Sharp on every monitor: moved to a monitor of another scale, the window draws itself
   again at that scale instead of being stretched by Windows.
 - `Ctrl+1…6` and `Ctrl+Tab` switch tabs; bookmark and routine tiles work from the keyboard.

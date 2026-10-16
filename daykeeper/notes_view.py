@@ -118,7 +118,7 @@ class NotesPage(TabPage):
         self.ndays_tree.tag_configure("today", font=(palette.FONT, 11, "bold"))
         Tooltip(self.ndays_tree, _("done / total items"))
         btns = ttk.Frame(left, style="Sidebar.TFrame")
-        btns.pack(fill="x", pady=(12, 0))
+        btns.pack(side="bottom", fill="x", pady=(12, 0), before=self.ndays_tree)  # packed first from the bottom: a short window shrinks the list, not the buttons
         ttk.Button(btns, text=_("+ Note"), style="Primary.TButton", command=self.new_note).pack(side="left")
         ttk.Button(btns, text=_("+ Checklist"), style="Small.TButton", command=lambda: self.new_note(checklist=True)).pack(side="left", padx=(8, 0))
 

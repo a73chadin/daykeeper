@@ -15,13 +15,15 @@ CARD_MIN = 360  # the right pane keeps at least this many pixels
 
 class SidebarKeeper:
     """Pins the first pane of ``paned`` to ``width`` (or to its own natural width when
-    ``None``) and clamps it to ``[minimum, total - CARD_MIN]``. Dragging the sash changes
-    the remembered width; a drag below the minimum snaps back."""
+    ``None``) and clamps it to ``[minimum, total - card_min]``. Dragging the sash changes
+    the remembered width; a drag below the minimum snaps back. ``card_min`` — in pixels
+    at 100 %, CARD_MIN unless the right pane needs more."""
 
-    def __init__(self, paned: ttk.PanedWindow, minimum: int, width: int | None = None):
+    def __init__(self, paned: ttk.PanedWindow, minimum: int, width: int | None = None, card_min: int = CARD_MIN):
         self.paned = paned
         self.minimum = minimum
         self.width = width
+        self.card_min = card_min
         self._dragging = False
         paned.bind("<Configure>", self.place, add="+")
         paned.bind("<ButtonPress-1>", self._press, add="+")
@@ -34,7 +36,7 @@ class SidebarKeeper:
         """The sash position for a paned window ``total`` pixels wide."""
         want = self.width if self.width is not None else self.paned.sashpos(0)
         painter = getattr(self.paned._root(), "painter", None)
-        card_min = round(CARD_MIN * painter.scale) if painter is not None else CARD_MIN
+        card_min = round(self.card_min * painter.scale) if painter is not None else self.card_min
         return max(self.minimum, min(want, total - card_min))
 
     def place(self, _event: tk.Event | None = None) -> None:
@@ -44,7 +46,10 @@ class SidebarKeeper:
         if total <= 1:  # not laid out yet; the first <Configure> places the sash
             return
         want = self.target(total)
-        if self.paned.sashpos(0) != want:
+        # the pane's own width too: ttk may keep the sash where it was told while the pane
+        # stays at the width it had (a pane with a fixed width, laid out before the sash)
+        pane = self.paned.nametowidget(self.paned.panes()[0])
+        if self.paned.sashpos(0) != want or abs(pane.winfo_width() - want) > 1:
             self.paned.sashpos(0, want)
 
     def _press(self, event: tk.Event) -> None:

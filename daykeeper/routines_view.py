@@ -279,7 +279,7 @@ class RoutinesPage(TabPage):
         self.rlog.bind("<Double-1>", self._open_log_entry)
         Tooltip(self.rlog, _("Double-click shows the output"))
         btns = ttk.Frame(left, style="Sidebar.TFrame")
-        btns.pack(fill="x", pady=(12, 0))
+        btns.pack(side="bottom", fill="x", pady=(12, 0), before=self.rlog)  # packed first from the bottom: a short window shrinks the list, not the buttons
         ttk.Button(btns, text=_("+ Routine"), style="Primary.TButton", command=lambda: self.routine_dialog(None)).pack(side="left")
 
         host = ttk.Frame(paned, style="Card.TFrame")

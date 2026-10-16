@@ -98,7 +98,7 @@ class BookmarksPage(TabPage):
         self.bgroups_tree.bind("<<TreeviewSelect>>", self._on_bgroup_select)
         self.bgroups_tree.bind("<Button-1>", self._on_bgroup_click, add="+")
         btns = ttk.Frame(left, style="Sidebar.TFrame")
-        btns.pack(fill="x", pady=(12, 0))
+        btns.pack(side="bottom", fill="x", pady=(12, 0), before=self.bgroups_tree)  # packed first from the bottom: a short window shrinks the list, not the buttons
         ttk.Button(btns, text=_("+ Bookmark"), style="Primary.TButton", command=lambda: self.bookmark_dialog(None)).pack(side="left")
 
         host = ttk.Frame(paned, style="Card.TFrame")

@@ -19,7 +19,7 @@ from .sidebar import SidebarKeeper
 from .tabpage import Shell, TabPage, make_scrollable
 from .timers import Debounce
 from .vault import DEFAULT_KIND, KINDS, MAIN_GROUP, Entry, Field, generate_password, main_group_label
-from .widgets import Placeholder, RowTip, TextField, Tooltip, more_button, divider
+from .widgets import FlowRow, Placeholder, RowTip, TextField, Tooltip, more_button, divider
 
 # Preset fields for the “+ Add field” button: (menu label key, field name key, secret?).
 FIELD_PRESETS: list[tuple[str, str, bool]] = [
@@ -46,6 +46,7 @@ ENTRY_KIND_ICONS = {
     "other": "📦",
 }
 SEARCH_SETTLE_MS = 150  # the list is filtered once the typing pauses this long
+VAULT_CARD_MIN = 560  # px at 100 %: a field row on two lines fits the card
 
 
 class VaultPage(TabPage):
@@ -69,7 +70,8 @@ class VaultPage(TabPage):
         paned.pack(fill="both", expand=True)
         self._build_sidebar(paned)
         self._build_card(paned)
-        self._vault_keeper = SidebarKeeper(paned, minimum=self._sidebar_min, width=max(self.app.painter.px(400), self._sidebar_min))
+        # the card keeps room for a field row (two lines when narrow): the sidebar gives way first
+        self._vault_keeper = SidebarKeeper(paned, minimum=self._sidebar_min, width=max(self.app.painter.px(400), self._sidebar_min), card_min=VAULT_CARD_MIN)
 
     # ---- what the window asks for
 
@@ -156,26 +158,33 @@ class VaultPage(TabPage):
 
         self._empty_hint = ttk.Label(left, text="", style="SidebarMuted.TLabel", justify="center")
 
-        btns = ttk.Frame(left, style="Sidebar.TFrame")
-        btns.pack(fill="x")
+        btns = FlowRow(left, style="Sidebar.TFrame")  # a narrow sidebar puts the arrows on a line of their own
+        btns.pack(side="bottom", fill="x", before=self.tree)  # packed first from the bottom: a short window shrinks the list, not the buttons
         new_btn = ttk.Button(btns, text=_("+ New entry") + "   ▾", style="Primary.TButton")
         new_menu = PopupMenu(new_btn)
         for kind, label in KINDS.items():
             new_menu.add_command(label=f"{ENTRY_KIND_ICONS[kind]}  {label}", command=lambda k=kind: self.new_entry(k))
         new_btn.config(command=lambda: new_menu.post_below(new_btn))
-        new_btn.pack(side="left")
+        btns.add(new_btn)
         delete = ttk.Button(btns, text="🗑", style="DangerIcon.TButton", command=self.delete_entry)
-        delete.pack(side="right")
+        btns.add(delete, side="right")
         Tooltip(delete, _("Delete"))
         down = ttk.Button(btns, text="▼", style="SidebarIcon.TButton", command=lambda: self.move_entry(+1))
-        down.pack(side="right", padx=(2, 6))
+        btns.add(down, padx=(2, 6), side="right")
         Tooltip(down, _("Down  (Alt+↓)"))
         up = ttk.Button(btns, text="▲", style="SidebarIcon.TButton", command=lambda: self.move_entry(-1))
-        up.pack(side="right", padx=(6, 2))
+        btns.add(up, padx=(6, 2), side="right")
         Tooltip(up, _("Up  (Alt+↑)"))
         self._refresh_group_widgets()
         left.update_idletasks()
-        self._sidebar_min = max(self.app.painter.px(300), left.winfo_reqwidth())  # narrower would cut the list and the buttons
+        # the list and the buttons give way (the list narrows, the buttons wrap); the list
+        # switcher and the search do not
+        pad = self.app.painter.px(28)
+        self._sidebar_min = max(self.app.painter.px(280), group_row.winfo_reqwidth() + pad, new_btn.winfo_reqwidth() + pad)
+        # the pane is as wide as the sash says: a pane never got narrower than its contents
+        # asked (the list asks for its columns), and the card was drawn over its right part
+        left.configure(width=self._sidebar_min)
+        left.pack_propagate(False)
 
     def _build_card(self, paned: ttk.PanedWindow) -> None:
         right = ttk.Frame(paned, style="Card.TFrame")
@@ -191,20 +200,24 @@ class VaultPage(TabPage):
         self.name_entry = ttk.Entry(card, textvariable=self.name_var, font=(FONT, 17, "bold"))
         self.name_entry.pack(fill="x", ipady=2)
 
-        meta = ttk.Frame(card, style="Card.TFrame")
+        meta = FlowRow(card, style="Card.TFrame")  # a narrow card takes the list and the date to the next line
         meta.pack(fill="x", pady=(10, 0))
-        ttk.Label(meta, text=_("Kind"), style="CardMuted.TLabel").pack(side="left")
+        kind = ttk.Frame(meta, style="Card.TFrame")
+        ttk.Label(kind, text=_("Kind"), style="CardMuted.TLabel").pack(side="left")
         self.kind_var = tk.StringVar()
-        self.kind_box = Dropdown(meta, textvariable=self.kind_var, values=[f"{ENTRY_KIND_ICONS[k]}  {v}" for k, v in KINDS.items()], width=22)
+        self.kind_box = Dropdown(kind, textvariable=self.kind_var, values=[f"{ENTRY_KIND_ICONS[k]}  {v}" for k, v in KINDS.items()], width=22)
         self.kind_box.pack(side="left", padx=(8, 0))
         self.kind_box.bind("<<ComboboxSelected>>", self._on_kind_change)
-        ttk.Label(meta, text=_("List"), style="CardMuted.TLabel").pack(side="left", padx=(18, 0))
+        meta.add(kind)
+        group = ttk.Frame(meta, style="Card.TFrame")
+        ttk.Label(group, text=_("List"), style="CardMuted.TLabel").pack(side="left")
         self.entry_group_var = tk.StringVar()
-        self.entry_group_box = Dropdown(meta, textvariable=self.entry_group_var, width=16)
+        self.entry_group_box = Dropdown(group, textvariable=self.entry_group_var, width=16)
         self.entry_group_box.pack(side="left", padx=(8, 0))
         self.entry_group_box.bind("<<ComboboxSelected>>", self._on_entry_group_change)
+        meta.add(group, padx=(18, 0))
         self.updated_label = ttk.Label(meta, text="", style="CardMuted.TLabel")
-        self.updated_label.pack(side="right")
+        meta.add(self.updated_label, padx=(12, 0), side="right")
 
         divider(card).pack(fill="x", pady=(18, 14))
 
@@ -213,6 +226,12 @@ class VaultPage(TabPage):
         self.fields_frame = ttk.Frame(card, style="Card.TFrame")
         self.fields_frame.pack(fill="x")
         self.fields_frame.columnconfigure(1, weight=1)
+        # a narrow card puts each field's name above its value, and Copy becomes an icon:
+        # on one line the value field was squeezed out of sight
+        self._field_rows: list[tuple[ttk.Entry, ttk.Entry, ttk.Button, ttk.Button, ttk.Button, ttk.Checkbutton, ttk.Button]] = []
+        self._fields_compact = False
+        self._fields_need = 0  # the width one-line rows take
+        self.fields_frame.bind("<Configure>", self._fit_fields, add="+")
         self.add_field_btn = ttk.Button(card, text=_("+ Add field  ▾"), style="Link.TButton", command=self._show_add_field_menu)
         self.add_field_btn.pack(anchor="w", pady=(6, 0))
         Tooltip(self.add_field_btn, _("Token, login, password, site… or a custom field"))
@@ -293,7 +312,7 @@ class VaultPage(TabPage):
 
     def _fit_kind_column(self, texts: list[str]) -> None:
         """The right column as wide as its widest cell (icons grow with the screen scale),
-        and the sidebar never narrower than the list needs. Runs on every keystroke that
+        and the sidebar as wide as the list needs while the window has the room. Runs on every keystroke that
         changes a row, so the font is made once and each text is measured once."""
         widths = self._kind_widths
         for t in texts:
@@ -309,10 +328,11 @@ class VaultPage(TabPage):
         keeper = self._vault_keeper
         if keeper is None:
             return
-        self.tree.master.update_idletasks()
-        keeper.minimum = max(300, self.tree.master.winfo_reqwidth())
-        if keeper.width is not None and keeper.width < keeper.minimum:
-            keeper.width = keeper.minimum
+        # the width the list asks for is preferred, not required: a narrow window narrows
+        # the names (down to the column's minimum) rather than squeezing the card
+        need = max(300, int(self.tree.column("#0", "width")) + width + self.app.painter.px(32))  # the columns and the sidebar padding
+        if keeper.width is not None and keeper.width < need:
+            keeper.width = need
         keeper.place()
 
     def _select_in_tree(self, entry: Entry) -> None:
@@ -386,6 +406,7 @@ class VaultPage(TabPage):
             self.current = entry
             for child in self.fields_frame.winfo_children():
                 child.destroy()
+            self._field_rows = []
             self.note.delete("1.0", "end")
             if entry is None:
                 self.name_var.set("")
@@ -411,9 +432,7 @@ class VaultPage(TabPage):
         secret_var = tk.BooleanVar(value=f.secret)
 
         key_entry = ttk.Entry(frame, textvariable=key_var, width=15, style="Key.TEntry", font=(FONT, 10))
-        key_entry.grid(row=row, column=0, sticky="ew", pady=4)
         val_entry = ttk.Entry(frame, textvariable=val_var, width=10, show=BULLET if f.secret else "", font=(FONT, 11))
-        val_entry.grid(row=row, column=1, sticky="ew", padx=(8, 8), pady=4)
 
         def sync(*_):
             if self._loading:
@@ -434,26 +453,55 @@ class VaultPage(TabPage):
             sync()
 
         eye = ttk.Button(frame, text="👁", style="Icon.TButton", command=toggle_show)
-        eye.grid(row=row, column=2, padx=1)
         Tooltip(eye, _("Show / hide value"))
 
         copy_btn = ttk.Button(
             frame, text=_("Copy"), style="Small.TButton", command=lambda: self.app.copy_to_clipboard(val_var.get())
         )
-        copy_btn.grid(row=row, column=3, padx=(4, 1))
         Tooltip(copy_btn, _("To the clipboard; cleared after {n} s").format(n=CLEAR_SEC))
 
         gen = ttk.Button(frame, text="🎲", style="Icon.TButton", command=lambda: val_var.set(generate_password()))
-        gen.grid(row=row, column=4, padx=1)
         Tooltip(gen, _("Generate password"))
 
         lock = ttk.Checkbutton(frame, text="🔒", style="Toggle.Toolbutton", variable=secret_var, command=toggle_secret)
-        lock.grid(row=row, column=5, padx=1)
         Tooltip(lock, _("Secret: show as dots, do not search by value"))
 
         rm = ttk.Button(frame, text="✕", style="Icon.TButton", command=lambda: self.remove_field(f))
-        rm.grid(row=row, column=6, padx=(1, 0))
         Tooltip(rm, _("Delete field"))
+        self._field_rows.append((key_entry, val_entry, eye, copy_btn, gen, lock, rm))
+        self._grid_field(row)
+
+    def _grid_field(self, row: int) -> None:
+        """One line: name, value, buttons; compact: the name above, the value and the buttons below."""
+        key_entry, val_entry, eye, copy_btn, gen, lock, rm = self._field_rows[row]
+        if self._fields_compact:
+            key_entry.grid(row=2 * row, column=0, columnspan=7, sticky="w", pady=(6, 2))
+            val_entry.grid(row=2 * row + 1, column=0, columnspan=2, sticky="ew", padx=(0, 8), pady=(0, 4))
+            copy_btn.configure(text="⧉", style="Icon.TButton")
+        else:
+            key_entry.grid(row=row, column=0, columnspan=1, sticky="ew", pady=4)
+            val_entry.grid(row=row, column=1, columnspan=1, sticky="ew", padx=(8, 8), pady=4)
+            copy_btn.configure(text=_("Copy"), style="Small.TButton")
+        line = 2 * row + 1 if self._fields_compact else row
+        eye.grid(row=line, column=2, padx=1)
+        copy_btn.grid(row=line, column=3, padx=(4, 1))
+        gen.grid(row=line, column=4, padx=1)
+        lock.grid(row=line, column=5, padx=1)
+        rm.grid(row=line, column=6, padx=(1, 0))
+
+    def _fit_fields(self, event: tk.Event) -> None:
+        """Two lines a field when one line does not fit the card; back to one when it does."""
+        if not self._field_rows:
+            return
+        if not self._fields_compact:
+            self._fields_need = self.fields_frame.winfo_reqwidth()
+        compact = event.width < self._fields_need
+        if compact == self._fields_compact:
+            return
+        self._fields_compact = compact
+        self.fields_frame.columnconfigure(0, weight=1 if compact else 0)
+        for row in range(len(self._field_rows)):
+            self._grid_field(row)
 
     def _show_add_field_menu(self) -> None:
         """Preset field menu under the button: the chosen field is added with the right lock state."""
@@ -476,9 +524,8 @@ class VaultPage(TabPage):
         self.current.fields.append(Field(key, secret=secret))
         self._load_entry(self.current)
         self.edited()
-        rows = self.fields_frame.grid_slaves(column=1 if key else 0)
-        if rows:
-            rows[0].focus_set()  # grid_slaves returns in reverse order — [0] is the last row
+        if self._field_rows:
+            self._field_rows[-1][1 if key else 0].focus_set()  # the new field: its value when named, else its name
         self.app.update_idletasks()
         self.card_canvas.yview_moveto(1.0)
 

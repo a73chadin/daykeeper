@@ -11,6 +11,7 @@ A page of the window (TabPage); the check is the window's `GitLabWatcher`."""
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 import tkinter as tk
 import webbrowser
 from tkinter import ttk
@@ -164,6 +165,11 @@ class IntegrationsPage(TabPage):
         self._feed_parent: tk.Misc | None = None
         self._feed_head: tk.Frame | None = None
         self._feed_count = FEED_PAGE
+        # a settings column narrower than they ask goes to one column: hints under their
+        # fields, the ticks one under another, the texts wrapped at the column's width
+        self._fits: list[Callable[[bool], None]] = []
+        self._wraps: list[tuple[tk.Label, int]] = []  # a text and its widest wrap
+        self._narrow: bool | None = None
         super().__init__(app, parent)
 
     # ---- what the window asks for
@@ -204,6 +210,7 @@ class IntegrationsPage(TabPage):
         self._ifeed = ttk.Frame(host, style="Card.TFrame")
         self._iline = tk.Frame(host, bg=palette.BORDER, width=1)
         self.icanvas, self._ivsb, self.ibody = make_scrollable(self.app, self._isettings, (28, 20, 28, 20))
+        self.icanvas.bind("<Configure>", lambda _e: self._fit_settings(), add="+")
         self.fcanvas, _fvsb, self.fbody = make_scrollable(self.app, self._ifeed, (20, 20, 28, 20))
         self._relayout = Debounce(host, 120, self._move_feed)
         host.bind("<Configure>", lambda _e: self._relayout.touch() if self._wants_aside() != self._feed_aside else None)
@@ -269,6 +276,7 @@ class IntegrationsPage(TabPage):
         for child in (*self.ibody.winfo_children(), *self.fbody.winfo_children()):
             child.destroy()
         self._feed_parent = self._feed_head = self._feed_box = None
+        self._fits, self._wraps, self._narrow = [], [], None
         self._shown_sel = self._selected()
         if self._shown_sel == "jira":
             self._render_jira_stub()
@@ -300,10 +308,12 @@ class IntegrationsPage(TabPage):
                 self.app.gitlab.check_now()
 
         ttk.Checkbutton(head, text=_("Watch"), variable=enabled, command=toggle_enabled, style="Card.TCheckbutton").pack(side="right")
-        tk.Label(
+        about = tk.Label(
             body, text=_("Checks your open merge requests every few minutes and tells you what changed. The token needs the read_api scope and is taken from a password entry."),
             bg=palette.CARD, fg=palette.MUTED, font=self._ifonts["row"], justify="left", wraplength=640,
-        ).pack(anchor="w", pady=(4, 14))
+        )
+        about.pack(anchor="w", pady=(4, 14))
+        self._wraps.append((about, 640))
 
         form = tk.Frame(body, bg=palette.CARD)
         form.pack(fill="x")
@@ -317,10 +327,12 @@ class IntegrationsPage(TabPage):
         interval_labels = [_("every {n} min").format(n=n) for n in INTERVALS]
 
         def row(r, label, widget, hint=""):
-            tk.Label(form, text=label, bg=palette.CARD, fg=palette.TEXT, font=self._ifonts["row"]).grid(row=r, column=0, sticky="w", padx=(0, 14), pady=4)
-            widget.grid(row=r, column=1, sticky="w", pady=4)
+            tk.Label(form, text=label, bg=palette.CARD, fg=palette.TEXT, font=self._ifonts["row"]).grid(row=2 * r, column=0, sticky="w", padx=(0, 14), pady=4)
+            widget.grid(row=2 * r, column=1, sticky="w", pady=4)
             if hint:
-                tk.Label(form, text=hint, bg=palette.CARD, fg=palette.MUTED, font=self._ifonts["small"]).grid(row=r, column=2, sticky="w", padx=(10, 0))
+                note = tk.Label(form, text=hint, bg=palette.CARD, fg=palette.MUTED, font=self._ifonts["small"])
+                self._fits.append(lambda narrow, n=note: n.grid(
+                    row=2 * r + 1 if narrow else 2 * r, column=1 if narrow else 2, sticky="w", padx=(0 if narrow else 10, 0), pady=(0, 4) if narrow else 0))
 
         url_entry = ttk.Entry(form, textvariable=url_var, width=42)
         row(0, _("Address"), url_entry, "https://gitlab.example.com")
@@ -342,7 +354,8 @@ class IntegrationsPage(TabPage):
         rules = tk.Frame(body, bg=palette.CARD)
         rules.pack(fill="x")
         self._rule_vars = {}
-        for i, (code, (label, _on)) in enumerate(RULES.items()):
+        ticks: list[ttk.Checkbutton] = []
+        for code, (label, _on) in RULES.items():
             var = tk.BooleanVar(value=gl.rule(code))
             self._rule_vars[code] = var
 
@@ -351,7 +364,8 @@ class IntegrationsPage(TabPage):
                 integ.gitlab_full = 0.0  # a rule just on has no facts yet: the next check asks about all
                 self.app.mark_dirty("integrations")
 
-            ttk.Checkbutton(rules, text=f"{EVENT_ICONS[code]}  {_(label)}", variable=var, command=flip, style="Card.TCheckbutton").grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 24), pady=2)
+            ticks.append(ttk.Checkbutton(rules, text=f"{EVENT_ICONS[code]}  {_(label)}", variable=var, command=flip, style="Card.TCheckbutton"))
+        self._fits.append(lambda narrow: self._grid_ticks(ticks, narrow))
 
         self._render_projects(body)
 
@@ -361,11 +375,15 @@ class IntegrationsPage(TabPage):
         who = _("Signed in as @{user}").format(user=gl.username) if gl.username else ""
         self._gl_status_label = tk.Label(actions, text=self.app.gitlab.status or who, bg=palette.CARD, fg=palette.MUTED, font=self._ifonts["row"], justify="left", wraplength=520)
         self._gl_status_label.pack(side="left", padx=(12, 0))
+        for fit in self._fits:
+            fit(False)  # the wide form is measured: it says how wide the settings column wants to be
 
         body.update_idletasks()  # the settings column is as wide as the settings ask
         self._settings_width = body.winfo_reqwidth() + self._ivsb.winfo_reqwidth()  # the scrollbar shares the column
         self._place_columns()  # the width is known now: the feed is made once, in its place
         self._build_feed_block()
+        self._narrow = False
+        self._fit_settings()
 
     def _render_projects(self, body: tk.Misc) -> None:
         """Which projects are watched: a tick per project with my open MRs; none ticked — all."""
@@ -381,6 +399,7 @@ class IntegrationsPage(TabPage):
 
         note = tk.Label(body, text=hint(), bg=palette.CARD, fg=palette.MUTED, font=self._ifonts["small"], justify="left", wraplength=640)
         note.pack(anchor="w", pady=(0, 6))
+        self._wraps.append((note, 640))
         box = tk.Frame(body, bg=palette.CARD)
         box.pack(fill="x")
         ticks: dict[str, tk.BooleanVar] = {}
@@ -391,9 +410,34 @@ class IntegrationsPage(TabPage):
             note.configure(text=hint())
             self.app.mark_dirty("integrations")
 
-        for i, path in enumerate(known):
+        boxes = []
+        for path in known:
             ticks[path] = tk.BooleanVar(value=path in gl.projects)
-            ttk.Checkbutton(box, text=path, variable=ticks[path], command=changed, style="Card.TCheckbutton").grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 24), pady=2)
+            boxes.append(ttk.Checkbutton(box, text=path, variable=ticks[path], command=changed, style="Card.TCheckbutton"))
+        self._fits.append(lambda narrow: self._grid_ticks(boxes, narrow))
+
+    @staticmethod
+    def _grid_ticks(ticks: list[ttk.Checkbutton], narrow: bool) -> None:
+        """Two columns of ticks, or one when the settings column is narrow."""
+        for i, tick in enumerate(ticks):
+            tick.grid(row=i if narrow else i // 2, column=0 if narrow else i % 2, sticky="w", padx=(0, 24), pady=2)
+
+    def _fit_settings(self) -> None:
+        """The settings to the width of their column: one column of everything when the
+        wide form does not fit, the texts wrapped at the width."""
+        if self._narrow is None:
+            return  # not drawn yet, or a section without the form
+        room = self.icanvas.winfo_width()
+        if room <= 1:
+            return
+        for label, widest in self._wraps:
+            if label.winfo_exists():
+                label.configure(wraplength=max(200, min(widest, room - self.app.painter.px(64))))
+        narrow = room + self._ivsb.winfo_reqwidth() < self._settings_width
+        if narrow != self._narrow:
+            self._narrow = narrow
+            for fit in self._fits:
+                fit(narrow)
 
     def _build_feed_block(self) -> None:
         """The head of the notifications and their list, right of the settings or under them."""

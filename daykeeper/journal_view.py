@@ -16,7 +16,7 @@ from .palette import BG, FONT, MONO, TEXT, WHITE
 from .popup import PopupMenu
 from .sidebar import SidebarKeeper
 from .tabpage import Shell, TabPage, make_scrollable
-from .widgets import Placeholder, TextField, Tooltip, soft_edge
+from .widgets import FlowRow, Placeholder, TextField, Tooltip, soft_edge
 
 
 class JournalPage(TabPage):
@@ -47,7 +47,7 @@ class JournalPage(TabPage):
         self.days_tree.bind("<<TreeviewSelect>>", self._on_day_select)
         Tooltip(self.days_tree, _("The numbers on the right: {columns}").format(columns=" / ".join(_(c.label) for c in layout.visible_columns()) or _("items")))
         dbtns = ttk.Frame(left, style="Sidebar.TFrame")
-        dbtns.pack(fill="x", pady=(12, 0))
+        dbtns.pack(side="bottom", fill="x", pady=(12, 0), before=self.days_tree)  # packed first from the bottom: a short window shrinks the list, not the buttons
         ttk.Button(dbtns, text=_("+ Today"), style="Primary.TButton", command=self._add_today).pack(side="left")
         ttk.Button(dbtns, text=_("Delete day"), style="Danger.TButton", command=self._delete_day).pack(side="right")
 
@@ -55,7 +55,7 @@ class JournalPage(TabPage):
         paned.add(host, weight=1)
         SidebarKeeper(paned, minimum=self.app.painter.px(240))
         # the buttons stay at the bottom of the pane; only the day above them scrolls
-        actions = ttk.Frame(host, style="Card.TFrame", padding=(28, 12, 28, 16))
+        actions = FlowRow(host, style="Card.TFrame", padding=(28, 12, 28, 16))  # a narrow pane wraps the buttons
         actions.pack(side="bottom", fill="x")
         soft_edge(host).pack(side="bottom", fill="x")
         _canvas, _vsb, right = make_scrollable(self.app, host, (28, 20, 28, 16))
@@ -80,35 +80,37 @@ class JournalPage(TabPage):
         kinds = layout.visible_kinds()
         example = next((k for k in kinds if k.role == ROLE_MR), kinds[0] if kinds else None)
         sample = f"{_(example.label)}: {'!42, !43' if example.role == ROLE_MR else '…'}" if example else ""
-        ttk.Label(
+        activity_title = ttk.Label(
             right,
             text=_("ACTIVITY — {kinds}; a line like “{sample}”").format(kinds=", ".join(_(k.label) for k in kinds), sample=sample),
             style="Section.TLabel", wraplength=900, justify="left",
-        ).grid(row=10, column=0, columnspan=span, sticky="w", pady=(14, 4))
+        )
+        activity_title.grid(row=10, column=0, columnspan=span, sticky="w", pady=(14, 4))
+        right.bind("<Configure>", lambda e: activity_title.configure(wraplength=max(200, e.width)), add="+")  # wraps at the pane's width
         self.jactivity = TextField(right, height=4)
         self.jactivity.grid(row=11, column=0, columnspan=span, sticky="ew")
         self.jactivity.bind("<<Modified>>", lambda _e: self._jtext_modified("activities"))
 
-        quick = ttk.Frame(right, style="Card.TFrame")
+        quick = FlowRow(right, style="Card.TFrame")
         quick.grid(row=12, column=0, columnspan=span, sticky="ew", pady=(14, 4))
-        ttk.Label(quick, text=_("Add"), style="CardMuted.TLabel").pack(side="left")
+        add = ttk.Frame(quick, style="Card.TFrame")  # the label stays with its field
+        ttk.Label(add, text=_("Add"), style="CardMuted.TLabel").pack(side="left")
         self.jquick_var = tk.StringVar()
-        quick_entry = ttk.Entry(quick, textvariable=self.jquick_var, width=16, font=(FONT, 11))
-        quick_entry.pack(side="left", padx=(8, 8))
+        quick_entry = ttk.Entry(add, textvariable=self.jquick_var, width=16, font=(FONT, 11))
+        quick_entry.pack(side="left", padx=(8, 0))
+        quick.add(add, padx=(0, 8))
         if columns:
             quick_entry.bind("<Return>", lambda _e: self._quick_add(columns[0].id))
         self._jquick_entry = quick_entry
         for col in columns:
-            ttk.Button(quick, text=_(col.button or col.label), style="Small.TButton", command=lambda c=col.id: self._quick_add(c)).pack(
-                side="left", padx=(0, 6)
-            )
+            quick.add(ttk.Button(quick, text=_(col.button or col.label), style="Small.TButton", command=lambda c=col.id: self._quick_add(c)), padx=(0, 6))
         if kinds:
             act_btn = ttk.Button(quick, text=_("Activity") + "  ▾", style="Quiet.TButton")
             act_menu = PopupMenu(act_btn)
             for kind in kinds:
                 act_menu.add_command(label=_(kind.label), command=lambda k=kind.id: self._quick_add_activity(k))
             act_btn.config(command=lambda: act_menu.post_below(act_btn))
-            act_btn.pack(side="left", padx=(8, 0))
+            quick.add(act_btn, padx=(8, 0))
             Tooltip(act_btn, _("Adds the text from the field on the left as activity of the chosen kind; for MRs — !42 or a link"))
 
         self.jsections: dict[str, TextField] = {}
@@ -133,16 +135,14 @@ class JournalPage(TabPage):
             self.jother.grid(row=17, column=0, columnspan=span, sticky="ew")
         self.jother.bind("<<Modified>>", lambda _e: self._jtext_modified("other"))
 
-        ttk.Button(actions, text=_("📋  Build report"), style="Primary.TButton", command=self.report_dialog).pack(side="left")
-        ttk.Button(actions, text=_("Links…"), style="Small.TButton", command=lambda: self.app.settings_dialog("links")).pack(side="left", padx=(8, 0))
+        actions.add(ttk.Button(actions, text=_("📋  Build report"), style="Primary.TButton", command=self.report_dialog))
+        actions.add(ttk.Button(actions, text=_("Links…"), style="Small.TButton", command=lambda: self.app.settings_dialog("links")), padx=(8, 0))
         setup = ttk.Button(actions, text=_("Set up the journal…"), style="Small.TButton", command=lambda: self.app.settings_dialog("journal"))
-        setup.pack(side="left", padx=(8, 0))
+        actions.add(setup, padx=(8, 0))
         Tooltip(setup, _("Columns, kinds of activity and the report: a ready-made layout for your work or your own"))
-        ttk.Button(actions, text=_("Pick up from sessions"), style="Small.TButton", command=lambda: self.app.pull_inbox(loud=True)).pack(
-            side="left", padx=(10, 0)
-        )
+        actions.add(ttk.Button(actions, text=_("Pick up from sessions"), style="Small.TButton", command=lambda: self.app.pull_inbox(loud=True)), padx=(10, 0))
         self.jinbox_label = ttk.Label(actions, text="", style="CardMuted.TLabel")
-        self.jinbox_label.pack(side="right")
+        actions.add(self.jinbox_label, padx=(10, 0), side="right")
         self._jinbox_tip = Tooltip(self.jinbox_label, "")
 
         self.jplaceholder = ttk.Label(

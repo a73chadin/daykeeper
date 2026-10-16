@@ -294,6 +294,64 @@ class WrapLine(tk.Text):
             self.configure(height=lines)
 
 
+class FlowRow(ttk.Frame):
+    """A row of widgets that goes on to the next line when the width runs out, instead of
+    cutting the last ones off. The widgets are children of the row, put in with `add`
+    in their order; `side="right"` ones keep to the right edge of their line."""
+
+    def __init__(self, master: tk.Misc, gap: int = 6, **kw):
+        super().__init__(master, **kw)
+        self._gap = gap
+        self._items: list[tuple[tk.Widget, tuple[int, int], str]] = []
+        self._lines: list[ttk.Frame] = []
+        self._shape: list[int] = []  # how many items each line holds now
+        self.bind("<Configure>", lambda _e: self.reflow(), add="+")
+
+    def add(self, widget: tk.Widget, padx: tuple[int, int] = (0, 0), side: str = "left") -> None:
+        self._items.append((widget, padx, side))
+        self._shape = []
+        widget.bind("<Configure>", lambda _e: self.reflow(), add="+")  # its text changed width
+        self.reflow()
+
+    def _room(self) -> int:
+        width = self.winfo_width()
+        if width <= 1:
+            return 1 << 30  # not laid out yet: one line, the first <Configure> wraps it
+        raw = self.cget("padding")
+        pad = [int(float(str(p))) for p in (raw if isinstance(raw, (tuple, list)) else str(raw).split())] or [0]
+        left, right = pad[0], pad[2] if len(pad) > 2 else pad[0]
+        return width - left - right
+
+    def reflow(self) -> None:
+        room, shape, used = self._room(), [], 0
+        for widget, (left, right), _side in self._items:
+            need = widget.winfo_reqwidth() + left + right
+            if shape and used + need <= room:
+                shape[-1] += 1
+                used += need
+            else:
+                shape.append(1)
+                used = need - left  # a line does not start with a gap
+        if shape == self._shape:
+            return
+        self._shape = shape
+        style = str(self.cget("style")) or "TFrame"
+        while len(self._lines) < len(shape):
+            self._lines.append(ttk.Frame(self, style=style))
+        for widget, _padx, _side in self._items:
+            widget.pack_forget()
+        first = 0
+        for n, line in enumerate(self._lines):
+            if n >= len(shape):
+                line.pack_forget()
+                continue
+            line.pack(fill="x", pady=(0 if n == 0 else self._gap, 0))
+            for i, (widget, (left, right), side) in enumerate(self._items[first:first + shape[n]]):
+                widget.pack(in_=line, side=side, padx=(0 if i == 0 and side == "left" else left, right))
+                widget.lift(line)  # the line frame is made later and would cover it
+            first += shape[n]
+
+
 class TextField(RoundText):
     """A multi-line field in the common style: a rounded box, accent on focus."""
 
