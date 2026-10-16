@@ -27,18 +27,19 @@ for key in ("HOME", "APPDATA", "LOCALAPPDATA"):
     os.environ[key] = str(TMP / key.lower())
 
 from daykeeper import palette  # noqa: E402
+
+palette.apply(THEME)  # before the rest: modules take their colours when imported
+from daykeeper.app import App  # noqa: E402
 from daykeeper.journal import today  # noqa: E402
 from daykeeper.notes import NoteItem  # noqa: E402
 from daykeeper.settings import write_settings  # noqa: E402
 from daykeeper.vault import Vault  # noqa: E402
-
-palette.apply(THEME)
-from daykeeper.app import App  # noqa: E402
 from daykeeper.settings_view import sections  # noqa: E402
 
 OUT.mkdir(parents=True, exist_ok=True)
 VAULT = TMP / "sample.pkv"
-write_settings(TMP / "settings.json", {"language": LANG, "theme": THEME, "geometry": "1200x760+40+60"})
+SIZE = os.environ.get("SHOT_SIZE", "1200x760")  # the macOS runner's screen is 1024x768: the window gets cut to it
+write_settings(TMP / "settings.json", {"language": LANG, "theme": THEME, "geometry": f"{SIZE}+40+60"})
 
 
 def pump(win, seconds: float = 1.2) -> None:
