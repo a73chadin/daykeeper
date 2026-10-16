@@ -26,13 +26,20 @@ it still asks for the master password:
 
 - Windows — `Daykeeper.exe`. On the first start Windows may warn about an unknown
   publisher: the file is not signed.
-- macOS (Apple Silicon) — `Daykeeper-macos.zip`, unpack and drag `Daykeeper.app` to
-  Applications. The app is not signed with an Apple certificate, so the first start needs
-  right-click → Open (once), or in Terminal:
+- macOS (Apple Silicon: M1 and later) — `Daykeeper-macos.zip`, unpack and drag
+  `Daykeeper.app` to Applications. The app is not signed with an Apple certificate, so
+  macOS stops the first start. Once, either way:
 
-  ```
-  xattr -d com.apple.quarantine /Applications/Daykeeper.app
-  ```
+  1. Through the settings: double-click the app and close the warning, then System
+     Settings → Privacy & Security → Security → "Open Anyway" next to Daykeeper, confirm
+     with the Mac's password or Touch ID and press "Open". (Right-click → Open no longer
+     does this since macOS 15.)
+  2. In Terminal, also when macOS says the app is damaged or "Open Anyway" is not there —
+     this removes the "downloaded from the internet" mark:
+
+     ```
+     xattr -dr com.apple.quarantine /Applications/Daykeeper.app
+     ```
 
 From source (Python 3.12+ with tkinter):
 

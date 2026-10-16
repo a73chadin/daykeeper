@@ -312,8 +312,11 @@ history" mark (Windows only).
 `build.bat` again.
 
 **macOS says the app is damaged or from an unidentified developer.** The bundle is not
-signed. Right-click the app → Open once, or remove the quarantine flag:
-`xattr -d com.apple.quarantine /Applications/Daykeeper.app`.
+signed, so macOS stops its first start. Once, either way: double-click the app, close the
+warning, then System Settings → Privacy & Security → Security → "Open Anyway" next to
+Daykeeper and confirm (right-click → Open no longer does this since macOS 15); or, also
+when it says "damaged", remove the quarantine flag in Terminal:
+`xattr -dr com.apple.quarantine /Applications/Daykeeper.app`.
 
 ## 10. What is and is not protected
 

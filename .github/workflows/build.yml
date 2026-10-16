@@ -66,8 +66,8 @@ jobs:
   macos:
     needs: lint
     # Apple Silicon build (GitHub's current macOS runners are arm64). The app is not
-    # signed: on the first start use right-click -> Open, or remove the quarantine flag
-    # (see README).
+    # signed: the first start needs "Open Anyway" in Privacy & Security, or the quarantine
+    # flag removed (see README).
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
