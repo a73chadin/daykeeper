@@ -2,4 +2,4 @@
 encrypted file."""
 
 __version__ = "1.1.0"
-RELEASES_URL = "https://github.com/achadin-ru/daykeeper/releases"
+RELEASES_URL = "https://github.com/a73chadin/daykeeper/releases"
