@@ -17,6 +17,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # tests: asserts, made-up passwords and temp paths, a Python child process
 "tests/**" = ["S101", "S105", "S106", "S107", "S108", "S603"]
+# tools/screenshots.py: a sample vault password, asserts, the system screencapture
+"tools/**" = ["S101", "S105", "S603", "S607"]
 
 [tool.mypy]
 python_version = "3.13"
