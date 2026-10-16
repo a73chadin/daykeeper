@@ -20,7 +20,9 @@ MONO = "Consolas" if sys.platform == "win32" else ("Menlo" if _MAC else "DejaVu 
 # Tk on macOS takes a font size in screen points and ignores `tk scaling`: a size of 11 is
 # 11 pixels there, a quarter smaller than on Windows (11 pt = 14.7 px at 96 dpi), while the
 # boxes and gaps round the text are the same pixels on both. Every font size goes through pt().
-SIZE_SCALE = 4 / 3 if _MAC else 1.0
+# The full 4/3 made the text larger than in other Mac apps: the body size 11 comes out as
+# 13, the size macOS uses for its own text.
+SIZE_SCALE = 13 / 11 if _MAC else 1.0
 
 
 def pt(size: float) -> int:

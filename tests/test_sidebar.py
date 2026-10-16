@@ -4,7 +4,7 @@ import unittest
 from tkinter import ttk
 
 from daykeeper.sidebar import CARD_MIN, SidebarKeeper
-from tests.helpers import has_display
+from tests.helpers import has_display, hide
 
 
 def _root() -> tk.Tk | None:
@@ -14,7 +14,7 @@ def _root() -> tk.Tk | None:
         root = tk.Tk()
     except tk.TclError:  # no display
         return None
-    root.withdraw()
+    hide(root)
     return root
 
 

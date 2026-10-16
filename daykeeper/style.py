@@ -160,10 +160,12 @@ def install(root: tk.Tk) -> theme.Painter:
     style.map("Link.TButton", foreground=[("active", ACCENT_HOVER)])
     rounded("Danger.TButton", 10, (RAISED, None, lift), (DANGER_HOVER, None, lift), (DANGER_SOFT, None, lift / 2))
     style.configure("Danger.TButton", foreground=DANGER, padding=(12 + lift, 8 + lift), background=SIDEBAR, font=(FONT, pt(BUTTON_SIZE)))
+    # the corners of the rounded box already pad the label by radius + lift, so the sidebar
+    # icons add little: the arrows and the bin fit beside "+ New entry" in a narrow sidebar
     rounded("DangerIcon.TButton", 9, (None, None, 0), (DANGER_HOVER, None, lift * 0.75), (DANGER_SOFT, None, lift / 2))
-    style.configure("DangerIcon.TButton", foreground=DANGER, padding=(8 + lift * 0.75, 6 + lift * 0.75), width=2, background=SIDEBAR)
+    style.configure("DangerIcon.TButton", foreground=DANGER, padding=(2, 2), width=2, background=SIDEBAR)
     rounded("SidebarIcon.TButton", 9, (None, None, 0), (RAISED, None, lift * 0.75), (PRESSED, None, lift / 2))
-    style.configure("SidebarIcon.TButton", padding=(8 + lift * 0.75, 6 + lift * 0.75), width=2, foreground=MUTED, background=SIDEBAR)
+    style.configure("SidebarIcon.TButton", padding=(2, 2), width=2, foreground=MUTED, background=SIDEBAR)
     style.map("SidebarIcon.TButton", foreground=[("active", TEXT)])
 
     for name, font, outer in (("More.TButton", (FONT, pt(12), "bold"), SIDEBAR), ("Quiet.TButton", (FONT, pt(BUTTON_SIZE - 1)), CARD)):

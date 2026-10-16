@@ -1,6 +1,7 @@
 """SecretClipboard on fake backends: the Windows way when it is there, the window's own
 clipboard otherwise, and a wipe that only wipes its own text."""
 import unittest
+from unittest import mock
 
 from daykeeper.clipboard import SecretClipboard
 
@@ -55,6 +56,19 @@ class SecretClipboardTest(unittest.TestCase):
         self.assertEqual(store, {"text": "tok"})
         self.assertTrue(clip.wipe_if("tok"))
         self.assertEqual(store, {})
+
+
+class MacWipeTest(unittest.TestCase):
+    def test_the_wipe_empties_the_system_pasteboard_on_macos(self):
+        """Tk on macOS clears only its own copy: the password stayed on the pasteboard."""
+        from daykeeper import app as app_module
+
+        window = mock.Mock()
+        with mock.patch.object(app_module, "MAC", True), mock.patch.object(app_module.subprocess, "run") as run:
+            app_module.App._tk_clip_clear(window)
+        window.clipboard_clear.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ["pbcopy"])
+        self.assertEqual(run.call_args.kwargs["input"], b"")
 
 
 if __name__ == "__main__":

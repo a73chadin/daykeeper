@@ -71,7 +71,7 @@ class VaultPage(TabPage):
         self._build_sidebar(paned)
         self._build_card(paned)
         # the card keeps room for a field row (two lines when narrow): the sidebar gives way first
-        self._vault_keeper = SidebarKeeper(paned, minimum=self._sidebar_min, width=max(self.app.painter.px(400), self._sidebar_min), card_min=VAULT_CARD_MIN)
+        self._vault_keeper = SidebarKeeper(paned, minimum=self._sidebar_min, width=max(self._sidebar_width, self._sidebar_min), card_min=VAULT_CARD_MIN)
 
     # ---- what the window asks for
 
@@ -183,6 +183,8 @@ class VaultPage(TabPage):
         # switcher and the search do not
         pad = self.app.painter.px(28)
         self._sidebar_min = max(self.app.painter.px(280), group_row.winfo_reqwidth() + pad, new_btn.winfo_reqwidth() + pad)
+        # while the window has the room, the buttons stay on one line
+        self._sidebar_width = max(self.app.painter.px(400), new_btn.winfo_reqwidth() + 6 + tools.winfo_reqwidth() + pad)
         # the pane is as wide as the sash says: a pane never got narrower than its contents
         # asked (the list asks for its columns), and the card was drawn over its right part
         left.configure(width=self._sidebar_min)

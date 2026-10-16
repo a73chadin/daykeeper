@@ -11,7 +11,7 @@ from daykeeper.journal import today
 from daykeeper.security import GUARD_MASTER
 from daykeeper.settings import write_settings
 from daykeeper.vault import Vault
-from tests.helpers import has_display, reset_globals
+from tests.helpers import has_display, hide, reset_globals
 
 PASSWORD = "smoke-master-1"
 TABS = ("vault", "bookmarks", "journal", "notes", "routines", "integrations")
@@ -27,7 +27,7 @@ class AppSmokeTest(unittest.TestCase):
         from daykeeper.app import App
 
         self.app = App(self.path, preview=True)
-        self.app.withdraw()
+        hide(self.app)
         self.errors: list[str] = []
         self.app.report_callback_exception = lambda *exc: self.errors.append(repr(exc[1]))
 

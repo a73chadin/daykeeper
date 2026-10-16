@@ -1,5 +1,19 @@
 # Changes
 
+## 1.1.1
+
+- macOS: a copied password is now wiped from the system clipboard after 30 seconds as
+  well; before, only the app's own copy was cleared and the password stayed there.
+- macOS: text at the size other Mac apps use (13 for body text); 1.1.0 drew it larger.
+- The arrows and the bin under the Passwords list are narrower and stay on one line with
+  "+ New entry" in a window from about 1000 px wide; the sidebar is wide enough for them.
+- The strength hint and the errors under a new master password wrap at the field's width:
+  the unlock panel no longer widens while one types.
+- The long heading of the activities on the Journal tab wraps inside the card instead of
+  being cut at its right edge in a narrow window.
+- Tests: on macOS the window tests no longer hide their window (Tk 8.6 there never returns
+  from an update over a hidden window that was never drawn); the whole suite runs on a Mac.
+
 ## 1.1.0
 
 **Data**

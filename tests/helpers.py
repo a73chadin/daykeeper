@@ -33,3 +33,11 @@ def has_display() -> bool:
         return False
     root.destroy()
     return True
+
+
+def hide(win: tk.Misc) -> None:
+    """Keep a test window off the screen, except on macOS: there Tk 8.6 never returns from
+    update() over a hidden window that has not been drawn yet (the app's own main loop does
+    not get stuck, the test's forced update does)."""
+    if sys.platform != "darwin":
+        win.withdraw()  # type: ignore[attr-defined]

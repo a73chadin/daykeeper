@@ -23,7 +23,7 @@ from daykeeper.security import FREE_TRIES, LOCK_AFTER, Attempts
 from daykeeper.session import Session
 from daykeeper.settings import Links, write_settings
 from daykeeper.vault import ChangedOnDisk, Entry, Field, Vault
-from tests.helpers import has_display, reset_globals
+from tests.helpers import has_display, hide, reset_globals
 
 PW = "audit-master-1"
 
@@ -398,7 +398,7 @@ class AppLockTest(unittest.TestCase):
         from daykeeper.app import App
 
         self.app = App(self.path, preview=True)
-        self.app.withdraw()
+        hide(self.app)
         self.app.unlock(PW)
         self.app.update()
 
@@ -619,7 +619,8 @@ class DarkThemeTest(unittest.TestCase):
             palette.apply("dark")
             from daykeeper.app import App
             app = App(Path(tempfile.mkdtemp()) / "d.pkv", preview=True)
-            app.withdraw()
+            if sys.platform != "darwin":  # see tests.helpers.hide
+                app.withdraw()
             errors = []
             app.report_callback_exception = lambda *exc: errors.append(repr(exc[1]))
             app.unlock("dark-master-1")

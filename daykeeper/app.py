@@ -443,10 +443,11 @@ class App(tk.Tk):
         eye.place(in_=self._pw1, relx=1.0, x=-self.painter.px(10), rely=0.5, anchor="e")
         Tooltip(eye, _("Show the password"))
 
+        strength: ttk.Label | None = None
         if not exists:
             self._pw2 = ttk.Entry(fields, show=BULLET, width=34, font=(FONT, pt(13)), style="Eye.TEntry")  # as wide inside as the first
             self._pw2.grid(row=1, column=0, pady=4, ipady=2, sticky="ew")
-            strength = ttk.Label(box, text="", style="PanelMuted.TLabel")
+            strength = ttk.Label(box, text="", style="PanelMuted.TLabel", justify="center")
             strength.grid(row=4, column=0, pady=(2, 0))
             self._pw1.bind("<KeyRelease>", lambda _e: strength.config(text=strength_text(self._pw1.get())), add="+")
             ttk.Label(
@@ -467,8 +468,13 @@ class App(tk.Tk):
         eye.bind("<Enter>", lambda _e: eye.config(fg=palette.TEXT))
         eye.bind("<Leave>", lambda _e: eye.config(fg=palette.MUTED))
 
-        self._unlock_err = ttk.Label(box, text="", style="PanelError.TLabel")
+        self._unlock_err = ttk.Label(box, text="", style="PanelError.TLabel", justify="center")
         self._unlock_err.grid(row=6, column=0, pady=(4, 0))
+        # a long hint or error wraps at the field's width: the panel must not widen as one types
+        fields.update_idletasks()
+        for label in (strength, self._unlock_err):
+            if label is not None:
+                label.config(wraplength=self._pw1.winfo_reqwidth())
 
         btn_text = _("Open") if exists else _("Create vault")
         ttk.Button(box, text=btn_text, style="Primary.TButton", command=self._do_unlock).grid(
@@ -1046,6 +1052,12 @@ class App(tk.Tk):
 
     def _tk_clip_clear(self) -> None:
         self.clipboard_clear()
+        if MAC:
+            # Tk on macOS forgets only its own copy: the system pasteboard kept the password
+            try:
+                subprocess.run(["pbcopy"], input=b"", timeout=2, check=False)  # noqa: S603, S607
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         self.update()
 
     # ------------------------------------------------------------- dialogs

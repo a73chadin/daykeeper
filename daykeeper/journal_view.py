@@ -86,7 +86,8 @@ class JournalPage(TabPage):
             style="Section.TLabel", wraplength=900, justify="left",
         )
         activity_title.grid(row=10, column=0, columnspan=span, sticky="w", pady=(14, 4))
-        right.bind("<Configure>", lambda e: activity_title.configure(wraplength=max(200, e.width)), add="+")  # wraps at the pane's width
+        side_pad = 28 + 28  # the card's padding left and right (make_scrollable above)
+        right.bind("<Configure>", lambda e: activity_title.configure(wraplength=max(200, e.width - side_pad)), add="+")  # wraps inside the card
         self.jactivity = TextField(right, height=4)
         self.jactivity.grid(row=11, column=0, columnspan=span, sticky="ew")
         self.jactivity.bind("<<Modified>>", lambda _e: self._jtext_modified("activities"))
