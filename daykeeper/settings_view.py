@@ -182,7 +182,7 @@ class SettingsWindow(tk.Toplevel):
         ).pack(anchor="w", pady=(6, 0))
 
         about = self.set_group(body, _("About"))
-        ttk.Label(about, text=f"Daykeeper {__version__}", style="Card.TLabel", font=(palette.FONT, 12, "bold")).pack(anchor="w")
+        ttk.Label(about, text=f"Daykeeper {__version__}", style="Card.TLabel", font=(palette.FONT, palette.pt(12), "bold")).pack(anchor="w")
         ttk.Label(about, text=_("Passwords, bookmarks, the journal, notes, routines and GitLab news in one encrypted file."), style="CardMuted.TLabel").pack(anchor="w", pady=(2, 10))
         releases = ttk.Button(about, text=_("Releases and changes ↗"), style="Small.TButton", command=lambda: webbrowser.open(RELEASES_URL))
         releases.pack(anchor="w")

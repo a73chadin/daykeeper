@@ -24,8 +24,8 @@ class Toast(tk.Toplevel):
         round_corners(self, palette.BORDER)
         body = tk.Frame(self, bg=palette.WHITE, padx=14, pady=10, cursor="hand2" if url or action else "")
         body.pack(fill="both", expand=True, padx=1, pady=1)
-        tk.Label(body, text=title, bg=palette.WHITE, fg=palette.MUTED, font=(palette.FONT, 9, "bold"), anchor="w").pack(fill="x")
-        tk.Label(body, text=text, bg=palette.WHITE, fg=palette.TEXT, font=(palette.FONT, 11), anchor="w", justify="left", wraplength=340).pack(fill="x", pady=(2, 0))
+        tk.Label(body, text=title, bg=palette.WHITE, fg=palette.MUTED, font=(palette.FONT, palette.pt(9), "bold"), anchor="w").pack(fill="x")
+        tk.Label(body, text=text, bg=palette.WHITE, fg=palette.TEXT, font=(palette.FONT, palette.pt(11)), anchor="w", justify="left", wraplength=340).pack(fill="x", pady=(2, 0))
         for w in (body, *body.winfo_children()):
             w.bind("<Button-1>", lambda _e: self._click(url, action))
         Toast.stack.append(self)

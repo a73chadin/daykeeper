@@ -16,7 +16,7 @@ from . import theme
 from .dialogs import BULLET, Dialog, show_error, show_info
 from .envimport import apply_plan, describe_plan, own_rules, parse_env, plan_import
 from .i18n import _
-from .palette import BG, FONT, MONO, TEXT
+from .palette import BG, FONT, MONO, TEXT, pt
 
 
 def import_env_dialog(app: tk.Tk) -> Dialog | None:
@@ -44,7 +44,7 @@ def import_env_dialog(app: tk.Tk) -> Dialog | None:
     dlg = Dialog(app, _("Import from a .env file"))
     box = dlg.box
     total_fields = sum(len(i.fields) for i in plan)
-    ttk.Label(box, text=_("Variables found: {fields}, entries: {entries}").format(fields=total_fields, entries=len(plan)), font=(FONT, 13, "bold")).grid(
+    ttk.Label(box, text=_("Variables found: {fields}, entries: {entries}").format(fields=total_fields, entries=len(plan)), font=(FONT, pt(13), "bold")).grid(
         row=0, column=0, sticky="w"
     )
     ttk.Label(
@@ -53,7 +53,7 @@ def import_env_dialog(app: tk.Tk) -> Dialog | None:
         style="Muted.TLabel",
         justify="left",
     ).grid(row=1, column=0, sticky="w", pady=(4, 10))
-    preview = theme.RoundText(box, app, outer=BG, width=90, height=22, font=(MONO, 10), wrap="none", fg=TEXT, padx=8, pady=6)
+    preview = theme.RoundText(box, app, outer=BG, width=90, height=22, font=(MONO, pt(10)), wrap="none", fg=TEXT, padx=8, pady=6)
     preview.insert("1.0", describe_plan(plan))
     preview.config(state="disabled")
     preview.grid(row=2, column=0, sticky="nsew")
@@ -85,7 +85,7 @@ def export_dialog(app: tk.Tk) -> Dialog | None:
     app.save_now()
     dlg = Dialog(app, _("Export to a readable file"))
     box = dlg.box
-    ttk.Label(box, text=_("Export all entries"), font=(FONT, 13, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+    ttk.Label(box, text=_("Export all entries"), font=(FONT, pt(13), "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
     ttk.Label(
         box,
         text=_("The file will NOT be encrypted: every password and token in it is plain text.\nDelete it as soon as it is no longer needed."),
@@ -162,7 +162,7 @@ def import_all_dialog(app: tk.Tk) -> Dialog | None:
         return None
     dlg = Dialog(app, _("Import everything"))
     box = dlg.box
-    ttk.Label(box, text=_("Replace everything in this vault with the file?"), font=(FONT, 13, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+    ttk.Label(box, text=_("Replace everything in this vault with the file?"), font=(FONT, pt(13), "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
     ttk.Label(
         box,
         text=_("Passwords, bookmarks, the journal, notes, routines and integrations become what the file holds.\nThe vault as it is now is kept beside it as a copy (Settings → Data → Copies). The lock settings stay."),

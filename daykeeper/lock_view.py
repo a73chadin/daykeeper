@@ -143,10 +143,10 @@ class SecurityController:
         self._guard_frame = frame
         box = ttk.Frame(frame)
         box.place(relx=0.5, rely=0.4, anchor="center")
-        ttk.Label(box, text="🔒", font=(palette.FONT, 32)).grid(row=0, column=0, pady=(0, 4))
-        ttk.Label(box, text=_("Passwords are locked"), style="Title.TLabel", font=(palette.FONT, 18, "bold")).grid(row=1, column=0)
+        ttk.Label(box, text="🔒", font=(palette.FONT, palette.pt(32))).grid(row=0, column=0, pady=(0, 4))
+        ttk.Label(box, text=_("Passwords are locked"), style="Title.TLabel", font=(palette.FONT, palette.pt(18), "bold")).grid(row=1, column=0)
         ttk.Label(box, text=(_("Enter the PIN code to see them") if self.vault.security.vault_guard == GUARD_PIN else _("Enter the master password to see them")), style="Subtitle.TLabel").grid(row=2, column=0, pady=(2, 14))
-        code = ttk.Entry(box, show=BULLET, width=28, font=(palette.FONT, 13))
+        code = ttk.Entry(box, show=BULLET, width=28, font=(palette.FONT, palette.pt(13)))
         code.grid(row=3, column=0, sticky="ew", ipady=2)
         err = ttk.Label(box, text="", style="Error.TLabel")
         err.grid(row=4, column=0, pady=(4, 0))

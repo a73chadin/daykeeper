@@ -103,19 +103,19 @@ class NotesPage(TabPage):
         paned.add(left, weight=0)
         self.nsearch_var = tk.StringVar()
         self.nsearch_var.trace_add("write", lambda *_: self._render_notes())
-        search = ttk.Entry(left, textvariable=self.nsearch_var, font=(palette.FONT, 11))
+        search = ttk.Entry(left, textvariable=self.nsearch_var, font=(palette.FONT, palette.pt(11)))
         search.pack(fill="x", pady=(0, 10))
         self._nsearch_entry = search
         Placeholder(search, _("🔍 Search notes"), palette.FIELD, var=self.nsearch_var, padx=8)
         Tooltip(search, _("Search across all days: title, text, items, file names"))
-        ttk.Label(left, text=_("DAYS"), style="SidebarMuted.TLabel", font=(palette.FONT, 10, "bold")).pack(anchor="w", pady=(0, 6))
+        ttk.Label(left, text=_("DAYS"), style="SidebarMuted.TLabel", font=(palette.FONT, palette.pt(10), "bold")).pack(anchor="w", pady=(0, 6))
         self.ndays_tree = ttk.Treeview(left, columns=("counts",), show="tree", selectmode="browse")
         self.ndays_tree.column("#0", width=170, stretch=True)
         self.ndays_tree.column("counts", width=70, anchor="e", stretch=False)
         self.ndays_tree.pack(fill="both", expand=True)
         self.ndays_tree.bind("<<TreeviewSelect>>", self._on_nday_select)
         self.ndays_tree.bind("<Button-1>", self._on_nday_click, add="+")
-        self.ndays_tree.tag_configure("today", font=(palette.FONT, 11, "bold"))
+        self.ndays_tree.tag_configure("today", font=(palette.FONT, palette.pt(11), "bold"))
         Tooltip(self.ndays_tree, _("done / total items"))
         btns = ttk.Frame(left, style="Sidebar.TFrame")
         btns.pack(side="bottom", fill="x", pady=(12, 0), before=self.ndays_tree)  # packed first from the bottom: a short window shrinks the list, not the buttons
@@ -133,9 +133,9 @@ class NotesPage(TabPage):
         self.nflow.grid(row=1, column=0, columnspan=99, sticky="ew")
         self.nflow.bind("<Configure>", self._on_nflow_resize, add="+")
         self._nflow_relayout = IdleOnce(self.app, self._relayout_now)
-        self.ntitle = ttk.Label(self.ngrid, text="", style="Card.TLabel", font=(palette.FONT, 17, "bold"))
+        self.ntitle = ttk.Label(self.ngrid, text="", style="Card.TLabel", font=(palette.FONT, palette.pt(17), "bold"))
         self.ntitle.grid(row=0, column=0, columnspan=99, sticky="w", pady=(0, 12))
-        self.nempty = ttk.Label(self.ngrid, text="", style="CardMuted.TLabel", font=(palette.FONT, 12))
+        self.nempty = ttk.Label(self.ngrid, text="", style="CardMuted.TLabel", font=(palette.FONT, palette.pt(12)))
         self._ncards: dict[str, tk.Frame] = {}
         self._nflow_width = 0
         self._nfonts = make_fonts({

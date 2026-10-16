@@ -191,7 +191,7 @@ class IntegrationsPage(TabPage):
         paned.pack(fill="both", expand=True)
         left = ttk.Frame(paned, style="Sidebar.TFrame", padding=(16, 16, 12, 12))
         paned.add(left, weight=0)
-        ttk.Label(left, text=_("CONNECTIONS"), style="SidebarMuted.TLabel", font=(palette.FONT, 10, "bold")).pack(anchor="w", pady=(0, 6))
+        ttk.Label(left, text=_("CONNECTIONS"), style="SidebarMuted.TLabel", font=(palette.FONT, palette.pt(10), "bold")).pack(anchor="w", pady=(0, 6))
         self.integ_tree = ttk.Treeview(left, columns=("state",), show="tree", selectmode="browse")
         self.integ_tree.column("#0", width=160, stretch=True)
         self.integ_tree.column("state", width=60, anchor="e", stretch=False)

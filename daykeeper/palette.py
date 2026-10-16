@@ -17,6 +17,15 @@ APP_TITLE = "Daykeeper Multitool"  # shown name; the exe, the bundle and the dat
 _MAC = sys.platform == "darwin"
 FONT = "Segoe UI" if sys.platform == "win32" else ("Helvetica Neue" if _MAC else "DejaVu Sans")
 MONO = "Consolas" if sys.platform == "win32" else ("Menlo" if _MAC else "DejaVu Sans Mono")
+# Tk on macOS takes a font size in screen points and ignores `tk scaling`: a size of 11 is
+# 11 pixels there, a quarter smaller than on Windows (11 pt = 14.7 px at 96 dpi), while the
+# boxes and gaps round the text are the same pixels on both. Every font size goes through pt().
+SIZE_SCALE = 4 / 3 if _MAC else 1.0
+
+
+def pt(size: float) -> int:
+    """A font size as the layout was drawn for it (Windows at 100 %)."""
+    return round(size * SIZE_SCALE)
 
 WHITE = "#FFFFFF"  # the light surface: fields, menus, tool tips' text; not white in the dark theme
 ON_ACCENT = "#FFFFFF"  # text and ticks on an accent fill, in both themes

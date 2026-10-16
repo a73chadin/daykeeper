@@ -42,7 +42,7 @@ def refresh_helper_in_background() -> None:
 
 
 def _text_box(parent, height: int, value: str = "") -> tk.Text:
-    box = tk.Text(parent, height=height, width=1, font=(palette.MONO, 9), bg=palette.BG, fg=palette.TEXT, relief="flat", bd=0,
+    box = tk.Text(parent, height=height, width=1, font=(palette.MONO, palette.pt(9)), bg=palette.BG, fg=palette.TEXT, relief="flat", bd=0,
                   wrap="word", insertbackground=palette.TEXT, padx=8, pady=6, highlightthickness=1,
                   highlightbackground=palette.BORDER, highlightcolor=palette.ACCENT)
     if value:

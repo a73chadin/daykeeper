@@ -27,7 +27,7 @@ from .integrations_view import GitLabWatcher, IntegrationsPage
 from .layout import DEFAULT_GEOMETRY, on_screen, parse_geometry
 from .lock_view import SecurityController, strength_text
 from .notes_view import NotesPage
-from .palette import ACCENT, APP_TITLE, CARD, FONT, RAIL, RAIL_HOVER
+from .palette import ACCENT, APP_TITLE, CARD, FONT, RAIL, RAIL_HOVER, pt
 from .routines_view import RoutineRuns, RoutinesPage
 from .session import Session
 from . import style
@@ -162,11 +162,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------ style
 
     def _start_dpi(self) -> int:
-        """The DPI of the monitor the window opens on: where it was left, else the main one.
-        Tk on macOS says 72 for every screen: a point would be a pixel there, and the text a
-        quarter smaller than the boxes and gaps drawn round it, so it counts as 96 like Windows."""
-        if sys.platform == "darwin":
-            return 96
+        """The DPI of the monitor the window opens on: where it was left, else the main one."""
         geometry = str(self.session.settings().get("geometry") or "")
         m = re.search(r"x\d+\+?(-?\d+)\+?(-?\d+)$", geometry)  # 1200x760+-2600+200
         point = (int(m.group(1)) + 100, int(m.group(2)) + 100) if m else (0, 0)
@@ -426,7 +422,7 @@ class App(tk.Tk):
         px = self.painter.px
         logo = tk.Canvas(box, width=px(64), height=px(64), bg=CARD, highlightthickness=0)
         logo.create_image(px(32), px(32), image=self.painter.image(64, 64, 18, fill=ACCENT))
-        logo.create_text(px(32), px(33), text="🗝", font=(FONT, 24), fill=palette.ON_ACCENT)
+        logo.create_text(px(32), px(33), text="🗝", font=(FONT, pt(24)), fill=palette.ON_ACCENT)
         logo.grid(row=0, column=0, pady=(0, 12))
         head = ttk.Frame(box, style="Card.TFrame")
         head.grid(row=1, column=0)
@@ -438,17 +434,17 @@ class App(tk.Tk):
         fields = ttk.Frame(box, style="Card.TFrame")
         fields.grid(row=3, column=0, sticky="ew")
         fields.columnconfigure(0, weight=1)
-        self._pw1 = ttk.Entry(fields, show=BULLET, width=34, font=(FONT, 13), style="Eye.TEntry")
+        self._pw1 = ttk.Entry(fields, show=BULLET, width=34, font=(FONT, pt(13)), style="Eye.TEntry")
         self._pw1.grid(row=0, column=0, pady=4, ipady=2, sticky="ew")
         self._pw1.focus_set()
         # a long phrase is typed blind otherwise; the eye sits inside the field at its right
         # edge, so the field lines up with the button under it
-        eye = tk.Label(fields, text="👁", bg=palette.FIELD, fg=palette.MUTED, font=(FONT, 12), cursor="hand2")
+        eye = tk.Label(fields, text="👁", bg=palette.FIELD, fg=palette.MUTED, font=(FONT, pt(12)), cursor="hand2")
         eye.place(in_=self._pw1, relx=1.0, x=-self.painter.px(10), rely=0.5, anchor="e")
         Tooltip(eye, _("Show the password"))
 
         if not exists:
-            self._pw2 = ttk.Entry(fields, show=BULLET, width=34, font=(FONT, 13), style="Eye.TEntry")  # as wide inside as the first
+            self._pw2 = ttk.Entry(fields, show=BULLET, width=34, font=(FONT, pt(13)), style="Eye.TEntry")  # as wide inside as the first
             self._pw2.grid(row=1, column=0, pady=4, ipady=2, sticky="ew")
             strength = ttk.Label(box, text="", style="PanelMuted.TLabel")
             strength.grid(row=4, column=0, pady=(2, 0))
@@ -570,7 +566,7 @@ class App(tk.Tk):
         px = self.painter.px
         mark = tk.Canvas(bar, width=px(30), height=px(30), bg=RAIL, highlightthickness=0)
         mark.create_image(px(15), px(15), image=self.painter.image(30, 30, 9, fill=ACCENT))
-        mark.create_text(px(15), px(16), text="🗝", font=(FONT, 12), fill=palette.ON_ACCENT)
+        mark.create_text(px(15), px(16), text="🗝", font=(FONT, pt(12)), fill=palette.ON_ACCENT)
         mark.pack(side="left", padx=(0, 8))
         # next to the logo, where the hand starts: settings, lock the app, lock the passwords.
         # Everything the old app menu held has its place in a tab or in Settings

@@ -13,7 +13,7 @@ from .clipboard import CLEAR_SEC
 from .dialogs import BULLET, ask_text, ask_yes_no, show_info, show_warning
 from .fieldicons import summary as field_summary
 from .i18n import _, fmt_time, hotkeys
-from .palette import FONT, WHITE
+from .palette import FONT, WHITE, pt
 from .popup import Dropdown, PopupMenu
 from .sidebar import SidebarKeeper
 from .tabpage import Shell, TabPage, make_scrollable
@@ -59,7 +59,7 @@ class VaultPage(TabPage):
         self.group: str = MAIN_GROUP  # which list is shown on the left
         self._visible: list[Entry] = []
         self._loading = False
-        self._kind_font = tkfont.Font(family=FONT, size=11)  # measures the kind column of the list
+        self._kind_font = tkfont.Font(family=FONT, size=pt(11))  # measures the kind column of the list
         self._kind_widths: dict[str, int] = {}  # text → its width in that font
         self._vault_keeper: SidebarKeeper | None = None  # pins the sidebar; made after both panes
         self.entry_group_box: Dropdown | None = None  # on the card, made after the sidebar
@@ -142,7 +142,7 @@ class VaultPage(TabPage):
         self.search_var = tk.StringVar()
         self._search_later = Debounce(self.frame, SEARCH_SETTLE_MS, self.refresh_list)
         self.search_var.trace_add("write", lambda *_: self._on_search_change())
-        search = ttk.Entry(left, textvariable=self.search_var, font=(FONT, 11))
+        search = ttk.Entry(left, textvariable=self.search_var, font=(FONT, pt(11)))
         search.pack(fill="x")
         self._search_entry = search
         self._search_hint = Placeholder(search, hotkeys(_("🔍  Search  (Ctrl+F)")), WHITE, var=self.search_var, padx=13, hide_on_focus=False)
@@ -197,7 +197,7 @@ class VaultPage(TabPage):
         # ---- header: the name large, kind and date below
         self.name_var = tk.StringVar()
         self.name_var.trace_add("write", self._on_name_change)
-        self.name_entry = ttk.Entry(card, textvariable=self.name_var, font=(FONT, 17, "bold"))
+        self.name_entry = ttk.Entry(card, textvariable=self.name_var, font=(FONT, pt(17), "bold"))
         self.name_entry.pack(fill="x", ipady=2)
 
         meta = FlowRow(card, style="Card.TFrame")  # a narrow card takes the list and the date to the next line
@@ -247,7 +247,7 @@ class VaultPage(TabPage):
             right,
             text=_("Pick an entry on the left\nor create a new one"),
             style="CardMuted.TLabel",
-            font=(FONT, 13),
+            font=(FONT, pt(13)),
             justify="center",
         )
 
@@ -431,8 +431,8 @@ class VaultPage(TabPage):
         val_var = tk.StringVar(value=f.value)
         secret_var = tk.BooleanVar(value=f.secret)
 
-        key_entry = ttk.Entry(frame, textvariable=key_var, width=15, style="Key.TEntry", font=(FONT, 10))
-        val_entry = ttk.Entry(frame, textvariable=val_var, width=10, show=BULLET if f.secret else "", font=(FONT, 11))
+        key_entry = ttk.Entry(frame, textvariable=key_var, width=15, style="Key.TEntry", font=(FONT, pt(10)))
+        val_entry = ttk.Entry(frame, textvariable=val_var, width=10, show=BULLET if f.secret else "", font=(FONT, pt(11)))
 
         def sync(*_):
             if self._loading:

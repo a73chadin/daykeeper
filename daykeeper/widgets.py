@@ -71,7 +71,7 @@ class Tooltip:
             text=self.text,
             bg=palette.TEXT,
             fg=palette.WHITE,
-            font=(palette.FONT, 9),
+            font=(palette.FONT, palette.pt(9)),
             padx=8,
             pady=4,
             wraplength=TOOLTIP_WRAP,  # a long explanation wraps instead of crossing the screen
@@ -98,7 +98,7 @@ def help_icon(parent: tk.Widget, text: str, bg: str = palette.CARD) -> tk.Label:
     """A small round “?” badge that explains the control beside it on hover: a soft accent
     circle, drawn smooth by the Painter, that turns solid under the pointer."""
     painter = getattr(parent._root(), "painter", None)
-    font = (palette.FONT, 8, "bold")
+    font = (palette.FONT, palette.pt(8), "bold")
     if painter is None:  # a bare Tk root (unit tests): the glyph alone
         badge = tk.Label(parent, text="?", bg=bg, fg=palette.ACCENT_INK, font=font, cursor="question_arrow")
     else:
@@ -373,7 +373,7 @@ class TextField(RoundText):
             border=palette.BORDER,
             focus=palette.ACCENT,
             height=height,
-            font=(palette.FONT, 11),
+            font=(palette.FONT, palette.pt(11)),
             wrap="word",
             undo=True,
             fg=palette.TEXT,
@@ -389,7 +389,7 @@ def make_fonts(spec: dict[str, tuple]) -> dict[str, tkfont.Font]:
     "done": (11, "strike"), "quote": (11, "italic")}."""
     out: dict[str, tkfont.Font] = {}
     for name, (size, *flags) in spec.items():
-        kw: dict = {"family": palette.MONO if "mono" in flags else palette.FONT, "size": size}
+        kw: dict = {"family": palette.MONO if "mono" in flags else palette.FONT, "size": palette.pt(size)}
         if "bold" in flags:
             kw["weight"] = "bold"
         if "italic" in flags:

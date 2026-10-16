@@ -21,6 +21,7 @@ from .palette import (
     DANGER,
     FIELD,
     FONT,
+    pt,
     HOVER,
     MONO,
     MUTED,
@@ -50,8 +51,8 @@ def install(root: tk.Tk) -> theme.Painter:
     the Painter that drew the images is returned (it keeps them alive)."""
     root.configure(bg=BG)
     for name, size in (("TkDefaultFont", 11), ("TkTextFont", 11), ("TkMenuFont", 10), ("TkHeadingFont", 11)):
-        tkfont.nametofont(name).configure(family=FONT, size=size)
-    root.option_add("*TCombobox*Listbox.font", (FONT, 11))
+        tkfont.nametofont(name).configure(family=FONT, size=pt(size))
+    root.option_add("*TCombobox*Listbox.font", (FONT, pt(11)))
     root.option_add("*TCombobox*Listbox.selectBackground", ACCENT_SOFT)
     root.option_add("*TCombobox*Listbox.selectForeground", TEXT)
     root.option_add("*TCombobox*Listbox.relief", "flat")
@@ -59,7 +60,7 @@ def install(root: tk.Tk) -> theme.Painter:
     root.option_add("*Menu.activeBackground", ACCENT_SOFT)
     root.option_add("*Menu.activeForeground", TEXT)
     root.option_add("*Menu.activeBorderWidth", 0)
-    root.option_add("*Menu.font", (FONT, 10))
+    root.option_add("*Menu.font", (FONT, pt(10)))
     for cls in ("Label", "Entry", "Text", "Listbox"):  # plain tk widgets made without a colour: the theme's text
         root.option_add(f"*{cls}.foreground", TEXT)
     root.option_add("*Entry.insertBackground", TEXT)
@@ -76,7 +77,7 @@ def install(root: tk.Tk) -> theme.Painter:
         ".",
         background=BG,
         foreground=TEXT,
-        font=(FONT, 11),
+        font=(FONT, pt(11)),
         bordercolor=BORDER,
         focuscolor=ACCENT,
         troughcolor=BG,
@@ -88,19 +89,19 @@ def install(root: tk.Tk) -> theme.Painter:
 
     style.configure("TLabel", background=BG)
     style.configure("Sidebar.TLabel", background=SIDEBAR)
-    style.configure("SidebarMuted.TLabel", background=SIDEBAR, foreground=MUTED, font=(FONT, 10))
+    style.configure("SidebarMuted.TLabel", background=SIDEBAR, foreground=MUTED, font=(FONT, pt(10)))
     style.configure("Card.TLabel", background=CARD)
-    style.configure("CardMuted.TLabel", background=CARD, foreground=MUTED, font=(FONT, 10))
-    style.configure("Section.TLabel", background=CARD, foreground=MUTED, font=(FONT, 9, "bold"))
-    style.configure("Title.TLabel", background=BG, font=(FONT, 20, "bold"))
-    style.configure("PanelTitle.TLabel", background=CARD, font=(FONT, 20, "bold"))
-    style.configure("Subtitle.TLabel", background=BG, foreground=MUTED, font=(FONT, 11))
-    style.configure("PanelSubtitle.TLabel", background=CARD, foreground=MUTED, font=(FONT, 11))
-    style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=(FONT, 10))
+    style.configure("CardMuted.TLabel", background=CARD, foreground=MUTED, font=(FONT, pt(10)))
+    style.configure("Section.TLabel", background=CARD, foreground=MUTED, font=(FONT, pt(9), "bold"))
+    style.configure("Title.TLabel", background=BG, font=(FONT, pt(20), "bold"))
+    style.configure("PanelTitle.TLabel", background=CARD, font=(FONT, pt(20), "bold"))
+    style.configure("Subtitle.TLabel", background=BG, foreground=MUTED, font=(FONT, pt(11)))
+    style.configure("PanelSubtitle.TLabel", background=CARD, foreground=MUTED, font=(FONT, pt(11)))
+    style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=(FONT, pt(10)))
     style.configure("Error.TLabel", background=BG, foreground=DANGER)
-    style.configure("Status.TLabel", background=BG, foreground=MUTED, font=(FONT, 9))
+    style.configure("Status.TLabel", background=BG, foreground=MUTED, font=(FONT, pt(9)))
     style.configure("Panel.TLabel", background=CARD)
-    style.configure("PanelMuted.TLabel", background=CARD, foreground=MUTED, font=(FONT, 10))
+    style.configure("PanelMuted.TLabel", background=CARD, foreground=MUTED, font=(FONT, pt(10)))
     style.configure("PanelError.TLabel", background=CARD, foreground=DANGER)
 
     # fields: a rounded box whose border turns accent on focus
@@ -144,27 +145,27 @@ def install(root: tk.Tk) -> theme.Painter:
     # raised buttons: white (or accent) on a soft shadow, no frame; pressed sinks a little
     lift = RAISED_SHADOW
     rounded("TButton", 10, (RAISED, None, lift), (RAISED_HOVER, None, lift), (PRESSED, None, lift / 2), (BG, BORDER, 0))
-    style.configure("TButton", padding=(14 + lift, 8 + lift), anchor="center", background=CARD, font=(FONT, BUTTON_SIZE))
+    style.configure("TButton", padding=(14 + lift, 8 + lift), anchor="center", background=CARD, font=(FONT, pt(BUTTON_SIZE)))
     rounded("Primary.TButton", 10, (ACCENT, None, lift), (ACCENT_HOVER, None, lift), (ACCENT_PRESSED, None, lift / 2), (ACCENT_DISABLED, None, 0))
-    style.configure("Primary.TButton", foreground=ON_ACCENT, font=(FONT, BUTTON_SIZE, "bold"), padding=(16 + lift, 8 + lift), background=CARD)
+    style.configure("Primary.TButton", foreground=ON_ACCENT, font=(FONT, pt(BUTTON_SIZE), "bold"), padding=(16 + lift, 8 + lift), background=CARD)
     style.map("Primary.TButton", foreground=[("disabled", ON_ACCENT)])
     rounded("Icon.TButton", 9, (None, None, 0), (RAISED, None, lift * 0.75), (PRESSED, None, lift / 2))
     style.configure("Icon.TButton", padding=(6 + lift * 0.75, 5 + lift * 0.75), width=3, background=CARD)
     style.map("Icon.TButton", background=[("disabled", CARD)], foreground=[("disabled", BORDER)])
     rounded("Small.TButton", 9, (RAISED, None, lift * 0.75), (RAISED_HOVER, None, lift * 0.75), (PRESSED, None, lift / 3))
-    style.configure("Small.TButton", padding=(10 + lift * 0.75, 5 + lift * 0.75), font=(FONT, BUTTON_SIZE - 1), background=CARD)
+    style.configure("Small.TButton", padding=(10 + lift * 0.75, 5 + lift * 0.75), font=(FONT, pt(BUTTON_SIZE - 1)), background=CARD)
     rounded("Link.TButton", 6, none, (ACCENT_SOFT, None), (ACCENT_SOFT, None))
     style.configure("Link.TButton", foreground=ACCENT, padding=(6, 5), background=CARD)
     style.map("Link.TButton", foreground=[("active", ACCENT_HOVER)])
     rounded("Danger.TButton", 10, (RAISED, None, lift), (DANGER_HOVER, None, lift), (DANGER_SOFT, None, lift / 2))
-    style.configure("Danger.TButton", foreground=DANGER, padding=(12 + lift, 8 + lift), background=SIDEBAR, font=(FONT, BUTTON_SIZE))
+    style.configure("Danger.TButton", foreground=DANGER, padding=(12 + lift, 8 + lift), background=SIDEBAR, font=(FONT, pt(BUTTON_SIZE)))
     rounded("DangerIcon.TButton", 9, (None, None, 0), (DANGER_HOVER, None, lift * 0.75), (DANGER_SOFT, None, lift / 2))
     style.configure("DangerIcon.TButton", foreground=DANGER, padding=(8 + lift * 0.75, 6 + lift * 0.75), width=2, background=SIDEBAR)
     rounded("SidebarIcon.TButton", 9, (None, None, 0), (RAISED, None, lift * 0.75), (PRESSED, None, lift / 2))
     style.configure("SidebarIcon.TButton", padding=(8 + lift * 0.75, 6 + lift * 0.75), width=2, foreground=MUTED, background=SIDEBAR)
     style.map("SidebarIcon.TButton", foreground=[("active", TEXT)])
 
-    for name, font, outer in (("More.TButton", (FONT, 12, "bold"), SIDEBAR), ("Quiet.TButton", (FONT, BUTTON_SIZE - 1), CARD)):
+    for name, font, outer in (("More.TButton", (FONT, pt(12), "bold"), SIDEBAR), ("Quiet.TButton", (FONT, pt(BUTTON_SIZE - 1)), CARD)):
         rounded(name, 9, (RAISED, None, lift * 0.75), (RAISED_HOVER, None, lift * 0.75), (PRESSED, None, lift / 3))
         style.configure(name, foreground=TEXT, font=font, background=outer)
     style.configure("More.TButton", padding=(6 + lift * 0.75, 4 + lift * 0.75), width=2, anchor="center")
@@ -177,17 +178,17 @@ def install(root: tk.Tk) -> theme.Painter:
             ("Menubutton.indicator", {"side": "right", "sticky": ""}),
             ("Button.label", {"sticky": "w"}),
         ]})]})])
-        style.configure(name, foreground=TEXT, background=outer, anchor="w", padding=(12, 7), arrowcolor=MUTED, arrowsize=4, font=(FONT, 11))
+        style.configure(name, foreground=TEXT, background=outer, anchor="w", padding=(12, 7), arrowcolor=MUTED, arrowsize=4, font=(FONT, pt(11)))
         style.map(name, arrowcolor=[("active", TEXT)], foreground=[("disabled", MUTED)])
 
     # the dark tab bar on top
     rounded("Nav.TButton", 9, none, (RAIL_HOVER, None), (RAIL_HOVER, None))
-    style.configure("Nav.TButton", foreground=RAIL_TEXT, anchor="center", padding=(10, 7), font=(FONT, 11), background=RAIL)
+    style.configure("Nav.TButton", foreground=RAIL_TEXT, anchor="center", padding=(10, 7), font=(FONT, pt(11)), background=RAIL)
     style.map("Nav.TButton", foreground=[("active", ON_ACCENT)])
     rounded("NavActive.TButton", 9, (RAIL_ACTIVE, None), (RAIL_ACTIVE, None), (RAIL_ACTIVE, None))
-    style.configure("NavActive.TButton", foreground=ON_ACCENT, anchor="center", padding=(10, 7), font=(FONT, 11, "bold"), background=RAIL)
+    style.configure("NavActive.TButton", foreground=ON_ACCENT, anchor="center", padding=(10, 7), font=(FONT, pt(11), "bold"), background=RAIL)
     rounded("NavIcon.TButton", 9, none, (RAIL_HOVER, None), (RAIL_HOVER, None), none)  # disabled (undo with nothing to undo): just dimmer
-    style.configure("NavIcon.TButton", foreground=RAIL_TEXT, padding=(9, 7), width=2, font=(FONT, 12), background=RAIL)
+    style.configure("NavIcon.TButton", foreground=RAIL_TEXT, padding=(9, 7), width=2, font=(FONT, pt(12)), background=RAIL)
     style.map("NavIcon.TButton", foreground=[("disabled", RAIL_HOVER), ("active", ON_ACCENT)], background=[("disabled", RAIL)])
 
     rounded("Toggle.Toolbutton", 7, none, (HOVER, None), (PRESSED, None))
@@ -204,7 +205,7 @@ def install(root: tk.Tk) -> theme.Painter:
         rowheight=38,
         borderwidth=0,
         relief="flat",
-        font=(FONT, 11),
+        font=(FONT, pt(11)),
     )
     style.map("Treeview", background=[("selected", ACCENT_SOFT)], foreground=[("selected", ACCENT_INK)])
     style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
@@ -260,18 +261,18 @@ def install(root: tk.Tk) -> theme.Painter:
     p.element(style, p.el("Group.rbox"), 12, [], p.box(12, CARD, BORDER, matte=BG))  # opaque: a resize copies it, no blending
     style.layout("Group.TFrame", [(p.el("Group.rbox"), {"sticky": "nswe"})])
     style.configure("Group.TFrame", background=BG)
-    style.configure("SetTitle.TLabel", background=SIDEBAR, font=(FONT, 15, "bold"))
-    style.configure("SetHead.TLabel", background=BG, font=(FONT, 18, "bold"))
-    style.configure("SetGroup.TLabel", background=BG, foreground=MUTED, font=(FONT, 9, "bold"))
+    style.configure("SetTitle.TLabel", background=SIDEBAR, font=(FONT, pt(15), "bold"))
+    style.configure("SetHead.TLabel", background=BG, font=(FONT, pt(18), "bold"))
+    style.configure("SetGroup.TLabel", background=BG, foreground=MUTED, font=(FONT, pt(9), "bold"))
     style.configure("CardOk.TLabel", background=BG, foreground=SUCCESS)
     style.configure("CardGood.TLabel", background=CARD, foreground=SUCCESS)  # a good state inside a white card
-    style.configure("CardTitle.TLabel", background=CARD, font=(FONT, 11, "bold"))
+    style.configure("CardTitle.TLabel", background=CARD, font=(FONT, pt(11), "bold"))
     style.configure("CardError.TLabel", background=CARD, foreground=DANGER)
-    style.configure("CardMono.TLabel", background=CARD, font=(MONO, 10))
+    style.configure("CardMono.TLabel", background=CARD, font=(MONO, pt(10)))
     rounded("SetNav.TButton", 8, none, (HOVER, None), (PRESSED, None))
     style.configure("SetNav.TButton", foreground=TEXT, anchor="w", padding=(12, 8), background=SIDEBAR)
     rounded("SetNavActive.TButton", 8, (ACCENT_SOFT, None), (ACCENT_SOFT, None), (ACCENT_SOFT, None))
-    style.configure("SetNavActive.TButton", foreground=ACCENT_INK, anchor="w", padding=(12, 8), background=SIDEBAR, font=(FONT, 11, "bold"))
+    style.configure("SetNavActive.TButton", foreground=ACCENT_INK, anchor="w", padding=(12, 8), background=SIDEBAR, font=(FONT, pt(11), "bold"))
     style.layout("Card.TRadiobutton", style.layout("TRadiobutton"))
     style.configure("Card.TRadiobutton", background=CARD)
     style.map("Card.TRadiobutton", background=[("active", CARD)])

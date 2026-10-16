@@ -82,13 +82,13 @@ class BookmarksPage(TabPage):
         paned.add(left, weight=0)
         self.bsearch_var = tk.StringVar()
         self.bsearch_var.trace_add("write", lambda *_: self._refresh_bookmarks())
-        search = ttk.Entry(left, textvariable=self.bsearch_var, font=(palette.FONT, 11))
+        search = ttk.Entry(left, textvariable=self.bsearch_var, font=(palette.FONT, palette.pt(11)))
         search.pack(fill="x", pady=(0, 10))
         self._bsearch_entry = search
         Placeholder(search, _("🔍 Search bookmarks"), palette.FIELD, var=self.bsearch_var, padx=8)
         head = ttk.Frame(left, style="Sidebar.TFrame")
         head.pack(fill="x", pady=(0, 6))
-        ttk.Label(head, text=_("GROUPS"), style="SidebarMuted.TLabel", font=(palette.FONT, 10, "bold")).pack(side="left")
+        ttk.Label(head, text=_("GROUPS"), style="SidebarMuted.TLabel", font=(palette.FONT, palette.pt(10), "bold")).pack(side="left")
         more = more_button(head, [(_("New group…"), self._bgroup_new), (_("Rename group…"), self._bgroup_rename), (_("Delete group"), self._bgroup_delete)])
         more.pack(side="right")
         self.bgroups_tree = ttk.Treeview(left, columns=("count",), show="tree", selectmode="browse")
@@ -544,7 +544,7 @@ class BookmarksPage(TabPage):
                     colour = bm.site_colour
                 rounded_rect(canvas, 2, 2, 24, 24, 7, fill=colour, outline=palette.TEXT if code == color_var.get() else colour, width=2)
                 if not code:  # “the colour of the site”
-                    canvas.create_text(13, 13, text="✦", fill=palette.ON_ACCENT, font=(palette.FONT, 9, "bold"))
+                    canvas.create_text(13, 13, text="✦", fill=palette.ON_ACCENT, font=(palette.FONT, palette.pt(9), "bold"))
 
         for code, label, _colour in TILE_COLORS:
             canvas = tk.Canvas(colours, width=26, height=26, bg=palette.BG, highlightthickness=0, cursor="hand2")

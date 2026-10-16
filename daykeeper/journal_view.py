@@ -12,7 +12,7 @@ from .dialogs import Dialog, ask_yes_no
 from .i18n import _, fmt_day
 from .journal import DEFAULT_OTHER, Day, build_report, inbox_path_for, parse_activity_lines, parse_lines, today
 from .journal_layout import ROLE_MR, current as current_layout
-from .palette import BG, FONT, MONO, TEXT, WHITE
+from .palette import BG, FONT, MONO, TEXT, WHITE, pt
 from .popup import PopupMenu
 from .sidebar import SidebarKeeper
 from .tabpage import Shell, TabPage, make_scrollable
@@ -39,7 +39,7 @@ class JournalPage(TabPage):
 
         left = ttk.Frame(paned, style="Sidebar.TFrame", padding=(16, 16, 12, 12))
         paned.add(left, weight=0)
-        ttk.Label(left, text=_("DAYS"), style="SidebarMuted.TLabel", font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 6))
+        ttk.Label(left, text=_("DAYS"), style="SidebarMuted.TLabel", font=(FONT, pt(10), "bold")).pack(anchor="w", pady=(0, 6))
         self.days_tree = ttk.Treeview(left, columns=("counts",), show="tree", selectmode="browse")
         self.days_tree.column("#0", width=170, stretch=True)
         self.days_tree.column("counts", width=90, anchor="e", stretch=False)
@@ -65,7 +65,7 @@ class JournalPage(TabPage):
         for col in range(span):
             right.columnconfigure(col, weight=1, uniform="sec")
 
-        self.jtitle = ttk.Label(right, text="", style="Card.TLabel", font=(FONT, 17, "bold"))
+        self.jtitle = ttk.Label(right, text="", style="Card.TLabel", font=(FONT, pt(17), "bold"))
         self.jtitle.grid(row=0, column=0, columnspan=span, sticky="w")
 
         ttk.Label(right, text=_("1. DONE — what the day was about, one line"), style="Section.TLabel").grid(
@@ -73,7 +73,7 @@ class JournalPage(TabPage):
         )
         self.jsummary_var = tk.StringVar()
         self.jsummary_var.trace_add("write", lambda *_: self._jsync())
-        self.jsummary_entry = ttk.Entry(right, textvariable=self.jsummary_var, font=(FONT, 11))
+        self.jsummary_entry = ttk.Entry(right, textvariable=self.jsummary_var, font=(FONT, pt(11)))
         self.jsummary_entry.grid(row=2, column=0, columnspan=span, sticky="ew")
         self.jsummary_hint = Placeholder(self.jsummary_entry, "", WHITE, padx=13)  # the text follows the day (_update_summary_hint)
 
@@ -96,7 +96,7 @@ class JournalPage(TabPage):
         add = ttk.Frame(quick, style="Card.TFrame")  # the label stays with its field
         ttk.Label(add, text=_("Add"), style="CardMuted.TLabel").pack(side="left")
         self.jquick_var = tk.StringVar()
-        quick_entry = ttk.Entry(add, textvariable=self.jquick_var, width=16, font=(FONT, 11))
+        quick_entry = ttk.Entry(add, textvariable=self.jquick_var, width=16, font=(FONT, pt(11)))
         quick_entry.pack(side="left", padx=(8, 0))
         quick.add(add, padx=(0, 8))
         if columns:
@@ -146,7 +146,7 @@ class JournalPage(TabPage):
         self._jinbox_tip = Tooltip(self.jinbox_label, "")
 
         self.jplaceholder = ttk.Label(
-            host, text=_("Pick a day on the left\nor press “+ Today”"), style="CardMuted.TLabel", font=(FONT, 13), justify="center"
+            host, text=_("Pick a day on the left\nor press “+ Today”"), style="CardMuted.TLabel", font=(FONT, pt(13)), justify="center"
         )
 
     # ---- day list
@@ -335,9 +335,9 @@ class JournalPage(TabPage):
         self.app.clipboard_append(text)
         dlg = Dialog(self.app, _("Report for {day}").format(day=fmt_day(self.jday.date)))
         box = dlg.box
-        ttk.Label(box, text=_("Report copied to the clipboard"), font=(FONT, 13, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(box, text=_("Report copied to the clipboard"), font=(FONT, pt(13), "bold")).grid(row=0, column=0, sticky="w")
         # a long line wraps by word on screen; the copied text keeps its lines as they are
-        view = theme.RoundText(box, self.app, outer=BG, width=78, height=min(32, text.count("\n") + 3), font=(MONO, 10), wrap="word", fg=TEXT, padx=8, pady=6)
+        view = theme.RoundText(box, self.app, outer=BG, width=78, height=min(32, text.count("\n") + 3), font=(MONO, pt(10)), wrap="word", fg=TEXT, padx=8, pady=6)
         view.insert("1.0", text)
         view.edit_reset()  # editable: a word fixed here goes out with "Copy", the day stays as it was
         view.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
