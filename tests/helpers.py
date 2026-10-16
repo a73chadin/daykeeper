@@ -1,6 +1,7 @@
 """Shared helpers for the tests: resetting module-level state and finding a display."""
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 
 from daykeeper import journal
@@ -16,7 +17,11 @@ def reset_globals() -> None:
 
 
 def has_display() -> bool:
-    """A Tk root can be made here (a headless CI runner has no display)."""
+    """A Tk root can be made here (a headless CI runner has no display). macOS always has
+    one, and there the probe itself did harm: after a root made and destroyed, the next
+    root's update() never returned (the macOS runner hung on the first window test)."""
+    if sys.platform == "darwin":
+        return True
     try:
         root = tk.Tk()
     except tk.TclError:
