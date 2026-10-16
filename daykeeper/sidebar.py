@@ -24,6 +24,7 @@ class SidebarKeeper:
         self.minimum = minimum
         self.width = width
         self.card_min = card_min
+        self._forced: tuple[int, int] | None = None  # the (sash, pane width) last set again
         self._dragging = False
         paned.bind("<Configure>", self.place, add="+")
         paned.bind("<ButtonPress-1>", self._press, add="+")
@@ -46,10 +47,17 @@ class SidebarKeeper:
         if total <= 1:  # not laid out yet; the first <Configure> places the sash
             return
         want = self.target(total)
+        if self.paned.sashpos(0) != want:
+            self.paned.sashpos(0, want)
+            return
         # the pane's own width too: ttk may keep the sash where it was told while the pane
-        # stays at the width it had (a pane with a fixed width, laid out before the sash)
+        # stays at the width it had (a pane with a fixed width, laid out before the sash).
+        # Once per case and on screen only: Tk on macOS lays out no panes in a hidden window,
+        # and setting the sash again and again there never ended
         pane = self.paned.nametowidget(self.paned.panes()[0])
-        if self.paned.sashpos(0) != want or abs(pane.winfo_width() - want) > 1:
+        case = (want, pane.winfo_width())
+        if abs(case[1] - want) > 1 and case != self._forced and self.paned.winfo_ismapped():
+            self._forced = case
             self.paned.sashpos(0, want)
 
     def _press(self, event: tk.Event) -> None:
