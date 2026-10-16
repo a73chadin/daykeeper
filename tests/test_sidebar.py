@@ -4,9 +4,12 @@ import unittest
 from tkinter import ttk
 
 from daykeeper.sidebar import CARD_MIN, SidebarKeeper
+from tests.helpers import has_display
 
 
 def _root() -> tk.Tk | None:
+    if not has_display():
+        return None
     try:
         root = tk.Tk()
     except tk.TclError:  # no display

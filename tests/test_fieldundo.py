@@ -6,6 +6,7 @@ from tkinter import ttk
 from unittest import mock
 
 from daykeeper import fieldundo
+from tests.helpers import has_display
 
 
 def key(entry):
@@ -14,6 +15,8 @@ def key(entry):
 
 class FieldUndoTest(unittest.TestCase):
     def setUp(self):
+        if not has_display():
+            self.skipTest("no display")
         try:
             self.root = tk.Tk()
         except tk.TclError:
