@@ -22,6 +22,9 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.13"
+# checked as on Windows wherever it runs: win32.py calls ctypes.windll, which a Linux
+# runner's ctypes does not have (the calls are skipped off Windows at run time)
+platform = "win32"
 # the pure modules: the models, the formats, the parsers. The window (tkinter) is checked
 # by its tests and the smoke run.
 files = [
