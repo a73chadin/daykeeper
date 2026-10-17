@@ -1,11 +1,12 @@
-"""The checklist of a note card on one canvas (notes_view.ItemList): the items are canvas
-items, not widgets; a click opens an editor over the row; the editor's keys move between
-items; ticking, removing, adding and folding redraw the lists. Skipped without a display.
-Key events need the focus, which a hidden window does not get, so the keyboard paths are
-driven through the methods the bindings call."""
+"""A note card is one canvas (notes_view.NoteCard): the title, the text, the items, the
+“+” row, the files and the footer are drawn; a field becomes a real widget over its spot
+only while it is edited. Skipped without a display. Key events need the focus, which a
+hidden window does not get, so the keyboard paths are driven through the methods the
+bindings call; clicks are generated at the zones the card reports."""
 from __future__ import annotations
 
 import tempfile
+import tkinter as tk
 import unittest
 from pathlib import Path
 
@@ -18,7 +19,7 @@ PASSWORD = "checklist-master-1"
 
 
 @unittest.skipUnless(has_display(), "no display")
-class NotesChecklistTest(unittest.TestCase):
+class NoteCardTest(unittest.TestCase):
     def setUp(self) -> None:
         reset_globals()
         self.tmp = tempfile.TemporaryDirectory()
@@ -31,7 +32,7 @@ class NotesChecklistTest(unittest.TestCase):
         self.errors: list[str] = []
         self.app.report_callback_exception = lambda *exc: self.errors.append(repr(exc[1]))
         self.app.unlock(PASSWORD)
-        self.note = self.app.vault.notes.add(today(), title="list", text="t")
+        self.note = self.app.vault.notes.add(today(), title="list", text="first\nsecond")
         for i in range(4):
             self.note.add_item(f"item {i}" + (" and a long tail that wraps onto a second line of the card for sure" if i == 1 else ""))
         self.note.toggle(self.note.items[3])
@@ -41,7 +42,6 @@ class NotesChecklistTest(unittest.TestCase):
         self.pump()
         self.page = self.app.pages["notes"]
         self.card = self.page._ncards[self.note.id]
-        self.open, self.done = self.card.open_list, self.card.done_list
 
     def tearDown(self) -> None:
         try:
@@ -54,116 +54,142 @@ class NotesChecklistTest(unittest.TestCase):
         self.app.update_idletasks()
         self.app.update()
 
-    def row_middle(self, lst, i: int) -> int:
-        y0, y1 = lst.rows[i]
-        return (y0 + y1) // 2
+    def zone(self, kind: str, payload=None) -> tuple[int, int]:
+        if kind == "text":  # the text is not a zone of its own: the room between the title and the items
+            x, y, w, h = self.card._text_box
+            return x + w // 2, y + h // 2
+        for x0, y0, x1, y1, k, p in self.card.zones:
+            if k == kind and (payload is None or p is payload):
+                return (x0 + x1) // 2, (y0 + y1) // 2
+        raise KeyError(kind)
 
-    def test_items_are_canvas_items_not_widgets(self):
-        self.assertEqual(len(self.open.rows), 3)
-        self.assertEqual(len(self.done.rows), 1)
-        self.assertEqual([w for w in self.open.winfo_children()], [], "no widget per item")
-        self.assertEqual(self.open.itemcget("t1", "text"), self.note.items[1].text)
-        first, second = (y1 - y0 for y0, y1 in self.open.rows[:2])
-        self.assertGreater(second, first, "a long item wraps and its row is taller")
+    def click(self, kind: str, payload=None) -> None:
+        x, y = self.zone(kind, payload)
+        self.card.event_generate("<Button-1>", x=x, y=y)
+        self.pump()
+
+    def test_the_card_is_one_canvas_with_everything_drawn(self):
+        self.assertEqual(self.card.winfo_children(), [], "no widget on the card until something is edited")
+        kinds = [z[4] for z in self.card.zones]
+        self.assertEqual(kinds.count("item"), 4)
+        for kind in ("title", "pin", "add", "plus", "fold", "clear", "more", "colour", "attach"):
+            self.assertIn(kind, kinds)
+        rows = [z for z in self.card.zones if z[4] == "item"]
+        self.assertGreater(rows[1][3] - rows[1][1], rows[0][3] - rows[0][1], "a long item wraps and its row is taller")
+        self.assertEqual(self.card.winfo_reqheight(), self.card.natural_h)
         self.assertEqual(self.errors, [])
 
-    def test_a_click_opens_the_editor_and_typing_edits_the_item(self):
-        self.open.event_generate("<Button-1>", x=60, y=self.row_middle(self.open, 0))
-        self.pump()
-        editor = self.open.editor
+    def test_a_click_opens_an_editor_over_the_spot_and_typing_edits(self):
+        item = self.note.items[0]
+        self.click("item", item)
+        editor = self.card.editor
         self.assertIsInstance(editor, WrapLine)
-        self.assertEqual(self.open.editing, 0)
-        self.assertEqual(str(self.open.itemcget("t0", "state")), "hidden", "the canvas text hides under the editor")
+        self.assertEqual(self.card.editing, ("item", item))
+        self.assertEqual(str(self.card.itemcget(f"item{id(item)}", "state")), "hidden", "the drawn text hides under the editor")
         editor.insert("end", "!")
         self.pump()
-        self.assertEqual(self.note.items[0].text, "item 0!")
-        self.open.close()
+        self.assertEqual(item.text, "item 0!")
+        self.card.close()
         self.pump()
-        self.assertIsNone(self.open.editor)
-        self.assertEqual(self.open.itemcget("t0", "text"), "item 0!")
+        self.assertIsNone(self.card.editor)
+        self.assertEqual(self.card.itemcget(f"item{id(item)}", "text"), "item 0!")
+        self.click("title")
+        self.assertIsInstance(self.card.editor, tk.Entry)
+        self.card.editor.insert("end", "!")
+        self.pump()
+        self.assertEqual(self.note.title, "list!")
+        self.card.close()
+        self.click("text")
+        self.assertIsInstance(self.card.editor, tk.Text)
+        before = self.card.natural_h
+        self.card.editor.insert("end", "\nthird\nfourth")
+        self.card._text_grew(self.card.editor)
+        self.pump()
+        self.assertTrue(self.note.text.endswith("third\nfourth"))
+        self.assertGreater(self.card.natural_h, before, "the card grows with the text")
+        self.card.close()
+        self.assertIn("fourth", self.card.itemcget("text", "text"))
         self.assertEqual(self.errors, [])
 
-    def test_tab_moves_the_editor_between_items_and_past_the_last_to_the_plus_row(self):
-        self.open.edit(0)
-        self.open._neighbour(+1)
-        self.assertEqual(self.open.editing, 1)
-        self.assertTrue(self.open.editor.value().startswith("item 1"))
-        self.open._neighbour(-1)
-        self.assertEqual(self.open.editing, 0)
-        self.open._neighbour(+1)
-        self.open._neighbour(+1)
-        self.open._neighbour(+1)  # past the last item
-        self.assertIsNone(self.open.editor)
+    def test_tab_moves_between_the_fields_and_past_the_last_to_the_next_card(self):
+        self.card.edit("title")
+        self.card._neighbour(+1)
+        self.assertEqual(self.card.editing, ("text", None))
+        self.card._neighbour(+1)
+        self.assertEqual(self.card.editing, ("item", self.note.open_items()[0]))
+        self.card._neighbour(-1)
+        self.assertEqual(self.card.editing, ("text", None))
+        for _ in range(6):
+            self.card._neighbour(+1)
+        self.assertIsNone(self.card.editor, "past the last field of the only card")
         self.assertEqual(self.errors, [])
 
     def test_the_check_box_ticks_and_the_cross_removes(self):
-        self.open.event_generate("<Button-1>", x=8, y=self.row_middle(self.open, 2))
-        self.pump()
+        self.click("check", self.note.items[2])
         self.assertTrue(self.note.items[2].done)
-        self.assertEqual((len(self.open.rows), len(self.done.rows)), (2, 2))
-        x = self.open.winfo_width() - 5
-        self.open.event_generate("<Motion>", x=x, y=self.row_middle(self.open, 1))
-        self.open.event_generate("<Button-1>", x=x, y=self.row_middle(self.open, 1))
-        self.pump()
+        self.assertEqual(len(self.note.open_items()), 2)
+        self.click("rm", self.note.items[1])
         self.assertEqual([i.text for i in self.note.open_items()], ["item 0"])
-        self.assertEqual(len(self.open.rows), 1)
+        self.assertEqual(sum(1 for z in self.card.zones if z[4] == "item"), 3)
         self.assertEqual(self.errors, [])
 
-    def test_adding_backspace_and_moving_redraw_the_lists(self):
+    def test_adding_backspace_and_moving(self):
         self.card.add_var.set("new one")
         self.page._note_add_item(self.card, self.note, self.card.add_var)
         self.pump()
         self.assertEqual([i.text for i in self.note.open_items()][-1], "new one")
-        self.assertEqual(len(self.open.rows), 4)
-        self.open.edit(3)
-        self.open.editor.delete("1.0", "end")
+        self.assertEqual(self.card.editing, ("add", None), "Enter keeps the “+” row open")
+        new = self.note.open_items()[-1]
+        self.card.edit("item", new)
+        self.card.editor.delete("1.0", "end")
         self.pump()
-        self.page._note_backspace_item(self.card, self.note, self.note.open_items()[3], self.open.editor)
+        self.page._note_backspace_item(self.card, self.note, new, self.card.editor)
         self.pump()
         self.assertEqual(len(self.note.open_items()), 3, "the emptied item is gone")
-        self.assertEqual(self.open.editing, 2, "the one above is being edited")
-        self.open.close()
-        self.open.edit(0)
+        self.assertEqual(self.card.editing, ("item", self.note.open_items()[2]), "the one above is being edited")
         first = self.note.open_items()[0]
         self.page._note_move_item(self.card, self.note, first, +1)
         self.pump()
         self.assertIs(self.note.open_items()[1], first)
-        self.assertEqual(self.open.editing, 1, "the moved item keeps its editor")
-        self.open.close()
+        self.assertEqual(self.card.editing, ("item", first), "the moved item keeps its editor")
+        self.card.close()
         self.assertEqual(self.errors, [])
 
-    def test_folding_hides_the_done_list_and_the_card_grows_with_items(self):
-        self.page._note_fold_done(self.card, self.note)
+    def test_folding_and_the_dragged_height(self):
+        self.click("fold")
+        self.assertTrue(self.note.hide_done)
+        self.assertFalse(any(z[4] == "item" and z[5].done for z in self.card.zones))
+        self.click("fold")
+        self.assertTrue(any(z[4] == "item" and z[5].done for z in self.card.zones))
+        natural = self.card.natural_h
+        self.note.height = natural + 200
+        self.page._place_note_cards()
         self.pump()
-        self.assertFalse(self.done.winfo_ismapped())
-        self.assertEqual(self.done.rows, [])
-        self.page._note_fold_done(self.card, self.note)
+        self.assertGreaterEqual(self.card.winfo_height(), natural + 190)
+        self.assertEqual(self.card._text_box[3] > 0, True)
+        footer = next(z for z in self.card.zones if z[4] == "more")
+        self.assertGreater(footer[1], natural, "the footer moved down into the stretched card")
+        self.note.height = 0
+        self.page._place_note_cards()
         self.pump()
-        self.assertTrue(self.done.winfo_ismapped())
-        self.assertEqual(len(self.done.rows), 1)
-        before = self.card.winfo_reqheight()
-        for i in range(5):
-            self.note.add_item(f"more {i}")
-        self.page._render_checklist(self.card, self.note)
-        self.pump()
-        self.assertGreater(self.card.winfo_reqheight(), before)
         self.assertEqual(self.errors, [])
 
     def test_keyboard_pick_and_edit(self):
-        self.open._select(0)
-        self.assertEqual(self.open.sel, 0)
-        self.assertTrue(self.open.find_withtag("s0"), "the picked row has a ring")
-        self.open._select(1)
-        self.open.edit(self.open.sel)
-        self.assertEqual(self.open.editing, 1)
-        self.open.close()
+        self.card._select(0)
+        self.assertEqual(self.card.sel, 0)
+        self.assertTrue(self.card.find_withtag("sel"), "the picked field has a ring")
+        self.card._select(2)
+        self.card._edit_selected()
+        self.assertEqual(self.card.editing, ("item", self.note.open_items()[0]))
+        self.card.close()
         self.assertEqual(self.errors, [])
 
-    def test_the_text_grows_only_when_its_height_changes(self):
-        text = self.card.text_widget
+    def test_the_text_editor_grows_only_when_its_height_changes(self):
+        self.card.edit("text")
+        text = self.card.editor
         text.insert("end", "\nmore\nlines")
-        self.page._grow_text(text)
-        self.assertEqual(int(text.cget("height")), 4)
+        self.card._text_grew(text)
+        self.assertEqual(int(text.cget("height")), 5)
         seen: list[str] = []
         original = text.config
 
@@ -172,8 +198,9 @@ class NotesChecklistTest(unittest.TestCase):
             return original(*args, **kw)
 
         text.config = spy  # type: ignore[method-assign]
-        self.page._grow_text(text)
+        self.card._text_grew(text)
         self.assertEqual(seen, [], "the same height is not set again: Tk would lay the whole text out anew")
+        self.card.close()
 
 
 if __name__ == "__main__":

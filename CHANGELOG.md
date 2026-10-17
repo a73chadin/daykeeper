@@ -26,18 +26,21 @@ Every finding of `AUDIT_REPORT.md` (section 9 there lists each with its test and
   (it was in three places), and a rail tab under the pointer stays white.
 
 **Speed**
-- The Notes tab opens about ten times faster on a day with many checklist items (a day
-  of 16 cards and 120 items: 0.7 s instead of 7.5 s on screen; a change to it is shown
-  in 0.5 s instead of 5.9 s; coming back to the tab takes 0.17 s instead of 0.6 s; a
-  resize of the window 0.1 s instead of 1.5 s). The items of a card are drawn on one
-  canvas instead of a frame, a check box, a text box and a “✕” per item — four Tk
-  windows each, with the text box the heaviest widget Tk has, and every one laid out
-  four times over on a tab build. An item becomes an editor only while it is edited: a
-  click (the cursor lands where you clicked), Enter or a typed key on it, Tab from the
-  item above; the list takes the focus from Tab, ↑/↓ pick an item. The footer of a card,
-  its progress row and its “Done (n)” line are one canvas each instead of a frame of
-  labels; the fields are made with their look instead of being restyled after packing;
-  and new cards are placed once their sizes are known instead of nine times over.
+- The Notes tab opens about twenty times faster on a busy day (16 cards with 120
+  checklist items: 0.35 s instead of 7.5 s on screen; a change to the day shows in 0.2 s
+  instead of 5.9 s; coming back to the tab takes 0.07 s instead of 0.6 s; a resize of the
+  window 0.06 s instead of 1.5 s). A card is now one canvas: the title, the text, the
+  check boxes, the items, the “+” row, the files and the footer are drawn on it. Before, a
+  card was about twenty Tk windows (a frame, an entry, a text box and a label per
+  item...), each laid out four times over on a tab build — and on Windows every Tk
+  widget is a window of its own. A field becomes a real one only while it is edited: a
+  click on the title, the text, an item or the “+” row opens the editor there (the
+  cursor lands where you clicked); Enter or a typed key opens the picked field from the
+  keyboard (Tab reaches a card, ↑/↓ pick a field); Tab and Shift+Tab move between the
+  fields of a card and on to the next card; Esc, Enter or a click elsewhere close the
+  editor. The text of a card shows its first eight lines; the editor holds all of it.
+  Everything else works as before: the check boxes, the “✕”, Backspace on an empty item,
+  Alt+↑/↓, the “Done (n)” fold, the files, the menus, the drag of an edge.
 - Typing in a long note no longer re-lays the whole text out on every key: the field's
   height is set only when it really changes (a tenth of a second per key on a note of
   30 KB in long paragraphs). A note of long paragraphs is still Tk's weak spot (about
