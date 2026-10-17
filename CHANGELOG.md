@@ -43,8 +43,13 @@ Every finding of `AUDIT_REPORT.md` (section 9 there lists each with its test and
   Alt+↑/↓, the “Done (n)” fold, the files, the menus, the drag of an edge.
 - Typing in a long note no longer re-lays the whole text out on every key: the field's
   height is set only when it really changes (a tenth of a second per key on a note of
-  30 KB in long paragraphs). A note of long paragraphs is still Tk's weak spot (about
-  8 ms a key for 30 KB without line breaks); one with line breaks is instant.
+  30 KB in long paragraphs). And the editor of a card belongs to the frame around the
+  scrolling area, placed over the card rather than made inside it: inside the scroll
+  canvas every key made Tk recompute the canvas item, ten times the cost (7 ms instead
+  of 0.7 on a 10 KB paragraph). A key in a note now costs what it costs in a bare Tk
+  text widget: nothing anywhere but at the start of a long paragraph, where Tk re-wraps
+  the paragraph (about 10 ms on screen for 10 KB of text without a line break, 25 ms
+  for 30 KB — Tk's known weak spot, the same in a bare widget).
 - Start: the app's own imports take 40 ms less (`urllib`, `xml.sax`, `concurrent.futures`,
   `tempfile` and `shutil` are loaded when first used). The Windows build also comes as a
   folder, `Daykeeper-win64.zip`: it opens its window in about 0.7 s, where the one-file

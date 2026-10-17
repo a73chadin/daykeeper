@@ -493,19 +493,19 @@ class NoteCard(tk.Canvas):
         editor: tk.Entry | tk.Text
         if kind == "title":
             var = tk.StringVar(value=note.title)
-            editor = tk.Entry(self, textvariable=var, font=f["title"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT, **editable_look(bg))
+            editor = tk.Entry(self._editor_master(), textvariable=var, font=f["title"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT, **editable_look(bg))
             var.trace_add("write", lambda *_: page._note_edit(note, "title", var.get()))
             editor.var = var  # type: ignore[attr-defined]  # alive while the editor is
             editor.bind("<Return>", lambda _e: (self.edit("text"), "break")[1])
         elif kind == "text":
-            editor = tk.Text(self, font=f["text"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, wrap="word", undo=True, insertbackground=palette.TEXT, padx=2, pady=4, height=max(2, min(MAX_EDIT_LINES, note.text.count("\n") + 2)), **editable_look(bg))
+            editor = tk.Text(self._editor_master(), font=f["text"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, wrap="word", undo=True, insertbackground=palette.TEXT, padx=2, pady=4, height=max(2, min(MAX_EDIT_LINES, note.text.count("\n") + 2)), **editable_look(bg))
             editor.insert("1.0", note.text)
             editor.edit_reset()
             editor.edit_modified(False)
             editor.bind("<<Modified>>", lambda _e, w=editor: page._note_text_modified(note, w))
             editor.bind("<KeyRelease>", lambda _e, w=editor: self._text_grew(w))
         elif kind == "add":
-            editor = tk.Entry(self, textvariable=self.add_var, font=f["item"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT, **editable_look(bg))
+            editor = tk.Entry(self._editor_master(), textvariable=self.add_var, font=f["item"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT, **editable_look(bg))
             editor.bind("<Return>", lambda _e: page._note_add_item(self, note, self.add_var))
             editor._commit_typed = lambda: page._commit_left_item(self, note, editor, self.add_var, clicked_away=True)  # type: ignore[attr-defined]
             page._watch_clicks_away()
@@ -514,7 +514,7 @@ class NoteCard(tk.Canvas):
             if not isinstance(item, NoteItem):
                 self.editing = None
                 return
-            editor = WrapLine(self, item.text, lambda value: page._note_item_edit(note, item, value), font=f["item_done" if item.done else "item"], bg=bg, fg=palette.MUTED if item.done else palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT, **editable_look(bg))
+            editor = WrapLine(self._editor_master(), item.text, lambda value: page._note_item_edit(note, item, value), font=f["item_done" if item.done else "item"], bg=bg, fg=palette.MUTED if item.done else palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT, **editable_look(bg))
             editor.bind("<Return>", lambda _e: (self.edit("add"), "break")[1])
             editor.bind("<Alt-Up>", lambda _e: page._note_move_item(self, note, item, -1))
             editor.bind("<Alt-Down>", lambda _e: page._note_move_item(self, note, item, +1))
@@ -548,6 +548,14 @@ class NoteCard(tk.Canvas):
         else:
             self.page._note_menu(self.note, event)
 
+    def _editor_master(self) -> tk.Misc:
+        """The editor belongs to the frame around the scroll canvas and is only placed over
+        the card (`in_`). Made a child of the card — or of anything inside the canvas's
+        window item — every key cost Tk ten times more (7 ms instead of 0.7 on a 10 KB
+        paragraph, 19 instead of 2 on a 30 KB one): a change inside a canvas window item
+        with laid-out siblings makes the canvas recompute the item on each key."""
+        return self.page.ncanvas.master
+
     def _place_editor(self) -> None:
         if self.editor is None or self.editing is None:
             return
@@ -556,10 +564,17 @@ class NoteCard(tk.Canvas):
             return
         x, y, w, h = box
         if isinstance(self.editor, tk.Text):
-            self.editor.place(x=x, y=y, width=w, height=h)
+            self.editor.place(in_=self, x=x, y=y, width=w, height=h)
         else:
-            self.editor.place(x=x, y=y, width=w)
+            self.editor.place(in_=self, x=x, y=y, width=w)
         self.editor.lift()
+
+    def destroy(self) -> None:
+        """The editor is not a child of the card (see `_editor_master`): it goes with the card by hand."""
+        editor, self.editor, self.editing = self.editor, None, None
+        if editor is not None and editor.winfo_exists():
+            editor.destroy()
+        super().destroy()
 
     def _text_grew(self, editor: tk.Text) -> None:
         """Typing in the text: the editor grows with its lines (to a limit) and the rest of
