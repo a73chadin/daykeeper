@@ -63,7 +63,7 @@ class CiFilesTest(unittest.TestCase):
         workflow = _read(".github/workflows/build.yml")
         self.assertIn("--icon assets/icon.ico", workflow)
         self.assertIn("--icon assets/icon.icns", workflow)
-        self.assertEqual(workflow.count("--add-data \"assets"), 2, "the Windows exe and the macOS bundle")
+        self.assertEqual(workflow.count("--add-data \"assets"), 3, "the Windows exe, the Windows folder and the macOS bundle")
 
     def test_a_suffixed_tag_is_a_pre_release(self):
         """v1.1.2-beta.1 goes out marked as a pre-release and never as the latest; the macOS

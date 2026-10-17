@@ -7,10 +7,12 @@ Pure (no tkinter)."""
 from __future__ import annotations
 
 import queue
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from collections.abc import Callable
+
+if TYPE_CHECKING:
+    from concurrent.futures import ThreadPoolExecutor
 
 
 @dataclass
@@ -40,6 +42,8 @@ class JobPool:
 
     def submit(self, kind: str, fn: Callable[..., Any], *args: Any, **meta: Any) -> None:
         if self._pool is None:
+            from concurrent.futures import ThreadPoolExecutor  # 20 ms at start otherwise, for a pool made on the first job
+
             self._pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix=self.name)
         self._out += 1
 

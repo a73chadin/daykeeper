@@ -25,6 +25,28 @@ Every finding of `AUDIT_REPORT.md` (section 9 there lists each with its test and
   darker amber that keeps 4.5:1 on a card. Text is never drawn in the accent itself any more
   (it was in three places), and a rail tab under the pointer stays white.
 
+**Speed**
+- The Notes tab opens about ten times faster on a day with many checklist items (a day
+  of 16 cards and 120 items: 0.7 s instead of 7.5 s on screen; a change to it is shown
+  in 0.5 s instead of 5.9 s; coming back to the tab takes 0.17 s instead of 0.6 s; a
+  resize of the window 0.1 s instead of 1.5 s). The items of a card are drawn on one
+  canvas instead of a frame, a check box, a text box and a “✕” per item — four Tk
+  windows each, with the text box the heaviest widget Tk has, and every one laid out
+  four times over on a tab build. An item becomes an editor only while it is edited: a
+  click (the cursor lands where you clicked), Enter or a typed key on it, Tab from the
+  item above; the list takes the focus from Tab, ↑/↓ pick an item. The footer of a card,
+  its progress row and its “Done (n)” line are one canvas each instead of a frame of
+  labels; the fields are made with their look instead of being restyled after packing;
+  and new cards are placed once their sizes are known instead of nine times over.
+- Typing in a long note no longer re-lays the whole text out on every key: the field's
+  height is set only when it really changes (a tenth of a second per key on a note of
+  30 KB in long paragraphs). A note of long paragraphs is still Tk's weak spot (about
+  8 ms a key for 30 KB without line breaks); one with line breaks is instant.
+- Start: the app's own imports take 40 ms less (`urllib`, `xml.sax`, `concurrent.futures`,
+  `tempfile` and `shutil` are loaded when first used). The Windows build also comes as a
+  folder, `Daykeeper-win64.zip`: it opens its window in about 0.7 s, where the one-file
+  exe unpacks itself on every start (1.5–2.7 s, more while the antivirus looks at it).
+
 **Security**
 - The PIN / master-password guard over the Passwords tab was only a picture: `Ctrl+F`,
   `Tab` and `Space` reached the search, the list and the Copy button under it, and the card

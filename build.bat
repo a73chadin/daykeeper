@@ -14,6 +14,12 @@ if not exist .venv\Scripts\python.exe (
 rem The app replaces an installed helper when this stamp differs.
 .venv\Scripts\python -c "import time, uuid; open(r'dist\daykeeper-cli\build-id.txt', 'w').write(time.strftime('%%Y%%m%%d-%%H%%M%%S-') + uuid.uuid4().hex[:8])" || exit /b 1
 .venv\Scripts\python -m PyInstaller --noconfirm --clean --onefile --noconsole --noupx --name Daykeeper --icon assets\icon.ico --add-data "assets;assets" --add-data "dist\daykeeper-cli;daykeeper-cli" main.py || exit /b 1
+rem The same app as a folder (dist\Daykeeper-win64\, zipped): it opens its window in
+rem well under a second, where the one-file exe first unpacks itself on every start
+rem (about two seconds, longer while the antivirus looks at it).
+.venv\Scripts\python -m PyInstaller --noconfirm --clean --onedir --noconsole --noupx --name Daykeeper --icon assets\icon.ico --add-data "assets;assets" --add-data "dist\daykeeper-cli;daykeeper-cli" --distpath dist\Daykeeper-win64 --workpath build\Daykeeper-win64 main.py || exit /b 1
+.venv\Scripts\python -c "import shutil; shutil.make_archive(r'dist\Daykeeper-win64', 'zip', r'dist\Daykeeper-win64')" || exit /b 1
 echo.
-echo Done: %~dp0dist\Daykeeper.exe
+echo Done: %~dp0dist\Daykeeper.exe (one file) and %~dp0dist\Daykeeper-win64.zip (a folder, starts faster)
 certutil -hashfile dist\Daykeeper.exe SHA256 | findstr /v "hashfile"
+certutil -hashfile dist\Daykeeper-win64.zip SHA256 | findstr /v "hashfile"

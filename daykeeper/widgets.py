@@ -240,7 +240,8 @@ class TextPlaceholder:
         self.sync()
 
     def sync(self, _e=None) -> None:
-        if self.text.get("1.0", "end-1c") or self.text.focus_get() is self.text:
+        # `compare`, not `get`: the hint is checked on every key, and `get` copied the whole text
+        if self.text.compare("end-1c", "!=", "1.0") or self.text.focus_get() is self.text:
             self.label.place_forget()
         else:
             self.label.place(x=3, y=5, anchor="nw")
@@ -259,8 +260,12 @@ class WrapLine(tk.Text):
         self.edit_modified(False)
         self._on_change = on_change
         self._lines = 1
+        self._width = 0  # the width the lines were counted at
         self.bind("<<Modified>>", self._modified, add="+")
-        self.bind("<Configure>", lambda _e: self.fit(), add="+")
+        # only a new width changes how the text wraps; a <Configure> for the height set
+        # by `fit` itself (and every one that reaches a row when its card is placed
+        # again) counted the lines once more — four counts per item on a tab build
+        self.bind("<Configure>", self._on_configure, add="+")
         self.bind("<Tab>", lambda _e: (self.tk_focusNext().focus_set(), "break")[1])
 
     def value(self) -> str:
@@ -282,6 +287,11 @@ class WrapLine(tk.Text):
             value = joined
         self._on_change(value)
         self.fit()
+
+    def _on_configure(self, event: tk.Event) -> None:
+        if event.width != self._width:
+            self._width = event.width
+            self.fit()
 
     def fit(self) -> None:
         """As tall as the text takes at the present width."""

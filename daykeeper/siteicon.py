@@ -16,7 +16,6 @@ import json
 import re
 import socket
 import struct
-import urllib.request
 import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -476,25 +475,38 @@ def redirect_allowed(from_url: str, to_url: str, resolve=socket.gethostbyname) -
     return True
 
 
-class _SafeRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not redirect_allowed(req.full_url, newurl):
-            return None  # urllib raises the HTTPError of the redirect; fetch() tries the next candidate
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+_OPENER = None  # urllib's opener, made on the first fetch: importing urllib.request (and
+# http.client, email.* behind it) cost 90 ms of every start for a fetch minutes later, if at all
 
 
-_OPENER = urllib.request.build_opener(_SafeRedirects())
+def _opener():
+    global _OPENER
+    if _OPENER is None:
+        import urllib.request
+
+        class _SafeRedirects(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                if not redirect_allowed(req.full_url, newurl):
+                    return None  # urllib raises the HTTPError of the redirect; fetch() tries the next candidate
+                return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+        _OPENER = urllib.request.build_opener(_SafeRedirects())
+    return _OPENER.open
 
 
 def _get(url: str, limit: int, opener) -> tuple[bytes, str]:
+    import urllib.request
+
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})  # noqa: S310 — the user's own bookmark, http(s) only
     with opener(req, timeout=TIMEOUT) as resp:  # noqa: S310 — the user's own bookmark
         return resp.read(limit + 1)[:limit], resp.geturl()
 
 
-def fetch(url: str, opener=_OPENER.open) -> SiteInfo:
+def fetch(url: str, opener=None) -> SiteInfo:
     """The icon and the colour of the site at `url`. Never raises: a site that does not
     answer or gives nothing usable yields an empty SiteInfo."""
+    if opener is None:
+        opener = _opener()
     info = SiteInfo()
     if urlparse(url).scheme not in ("http", "https"):
         return info

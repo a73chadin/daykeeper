@@ -34,37 +34,316 @@ WITH_FILES = "__files__"  # a “day” on the left: every card with attached fi
 FILE_ICONS = {".md": "📝", ".markdown": "📝", ".txt": "📄", ".log": "📄", ".pdf": "📕", ".png": "🖼", ".jpg": "🖼", ".jpeg": "🖼"}
 
 
-class CheckBox(tk.Canvas):
-    """A rounded check box drawn on a canvas: outlined when open, filled with a tick when done."""
+def editable_look(bg: str) -> dict:
+    """The options that make a field in a card look like a field (see NotesPage._editable)."""
+    return {"highlightthickness": 1, "highlightbackground": bg, "highlightcolor": palette.ACCENT, "cursor": "xterm"}
 
-    SIZE = 18
 
-    def __init__(self, master: tk.Misc, bg: str, accent: str, muted: str, checked: bool, command):
-        super().__init__(master, width=self.SIZE, height=self.SIZE, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
-        self.accent, self.muted, self.checked, self.hover = accent, muted, checked, False
-        self.bind("<Button-1>", lambda _e: command())
-        self.bind("<Enter>", lambda _e: self._set_hover(True))
-        self.bind("<Leave>", lambda _e: self._set_hover(False))
-        self.draw()
+TEXT_X = 26  # px at 100 %: the check box and the gap before an item's text
+RM_W = 18  # the “✕” at the right edge of a row
+ROW_PAD = 2  # above and below a row
+CHECK = 18  # the check box, px at 100 %
 
-    def _set_hover(self, on: bool) -> None:
-        self.hover = on
-        self.draw()
 
-    def set(self, checked: bool) -> None:
-        self.checked = checked
-        self.draw()
+class Strip(tk.Canvas):
+    """A row of small texts and glyphs on one canvas — the footer of a card, its
+    “Done (n)” line: a frame of labels was a Tk window per label. Items go left or
+    right in the order added; a click, the hover colour and a tooltip go by tag."""
 
-    def draw(self) -> None:
+    def __init__(self, master: tk.Misc, bg: str, pady: int = 0):
+        super().__init__(master, bg=bg, highlightthickness=0, bd=0, height=1)
+        self.bg, self.pady = bg, pady
+        self._items: list[tuple[str, str, int, str, str | None, str, str]] = []
+        self._width = 0
+        self.tip = Tooltip(self, "", attach=False)
+        self.bind("<Configure>", self._on_configure)
+        self.bind("<ButtonPress>", lambda _e: self.tip.hide(), add="+")
+
+    def add(self, tag: str, text: str, font, fill: str, side: str = "left", padx: int = 0, command=None, tip: str = "", hover: str | None = None, cursor: str = "hand2") -> None:
+        """`command(event)` on a click; `hover` — the colour under the pointer; `padx` — the gap before the item."""
+        self.create_text(0, self.pady, text=text, font=font, fill=fill, anchor="nw", tags=(tag,))
+        self._items.append((tag, side, padx, fill, hover, tip, cursor))
+        if command is not None:
+            self.tag_bind(tag, "<Button-1>", command)
+        self.tag_bind(tag, "<Enter>", lambda _e, t=tag: self._enter(t))
+        self.tag_bind(tag, "<Leave>", lambda _e, t=tag: self._leave(t))
+
+    def set_text(self, tag: str, text: str) -> None:
+        self.itemconfigure(tag, text=text)
+        self.layout()
+
+    def _enter(self, tag: str) -> None:
+        for t, _side, _padx, _fill, hover, tip, cursor in self._items:
+            if t != tag:
+                continue
+            if hover:
+                self.itemconfigure(tag, fill=hover)
+            self.configure(cursor=cursor)
+            if tip:
+                self.tip.text = tip
+                self.tip.anchor = lambda t=tag: self._tip_anchor(t)
+                self.tip.schedule()
+
+    def _tip_anchor(self, tag: str) -> tuple[int, int]:
+        """Under the middle of the item, on the screen."""
+        x0, _y0, x1, y1 = self.bbox(tag)
+        return self.winfo_rootx() + (x0 + x1) // 2, self.winfo_rooty() + y1 + 4
+
+    def _leave(self, tag: str) -> None:
+        for t, _side, _padx, fill, hover, _tip, _cursor in self._items:
+            if t == tag and hover:
+                self.itemconfigure(tag, fill=fill)
+        self.configure(cursor="")
+        self.tip.hide()
+
+    def _on_configure(self, event: tk.Event) -> None:
+        if event.width != self._width:
+            self._width = event.width
+            self.layout()
+
+    def layout(self) -> None:
+        """Left items from the left edge, right items from the right, in their order."""
+        width = self._width or self.winfo_reqwidth()
+        left, right, tallest = 0, width, 0
+        for tag, side, padx, _fill, _hover, _tip, _cursor in self._items:
+            box = self.bbox(tag)
+            if box is None:
+                continue
+            w, h = box[2] - box[0], box[3] - box[1]
+            tallest = max(tallest, h)
+            if side == "left":
+                left += padx
+                self.coords(tag, left, self.pady)
+                left += w
+            else:
+                right -= padx + w
+                self.coords(tag, right, self.pady)
+        self.configure(height=tallest + 2 * self.pady)
+
+
+class ItemList(tk.Canvas):
+    """The open (or the done) items of a card on one canvas: a check box, the text
+    wrapped at the row's width and a “✕” per item, all canvas items. An item becomes
+    an editor (WrapLine placed over its row) on a click, Enter or a typed key, and a
+    label again when the editor loses the focus. A card of twenty items used to be
+    eighty Tk windows laid out four times over on a tab build; this is one."""
+
+    def __init__(self, page: NotesPage, card: tk.Frame, master: tk.Misc, note: Note, done: bool, width: int):
+        bg = note.bg()
+        super().__init__(master, bg=bg, highlightthickness=0, bd=0, height=1, width=width, takefocus=1)
+        self.page, self.card, self.note, self.done = page, card, note, done
+        self.bg, self.accent = bg, note.accent()
+        self.px = page.app.painter.px
+        self.items: list[NoteItem] = []
+        self.rows: list[tuple[int, int]] = []  # (y0, y1) of each item
+        self.hot = -1  # the row under the pointer
+        self.sel = -1  # the row picked from the keyboard
+        self.editor: WrapLine | None = None
+        self.editing = -1
+        self._width = width
+        self.bind("<Configure>", self._on_configure)
+        self.bind("<Button-1>", self._click)
+        self.bind("<Button-3>", self._menu)
+        self.bind("<Motion>", self._motion)
+        self.bind("<Leave>", lambda _e: self._set_hot(-1))
+        self.bind("<FocusIn>", lambda _e: self._select(0 if self.sel < 0 else self.sel))
+        self.bind("<FocusOut>", lambda _e: self._select(-1))
+        self.bind("<Up>", lambda _e: (self._select(max(0, self.sel - 1)), "break")[1])
+        self.bind("<Down>", lambda _e: (self._select(min(len(self.items) - 1, self.sel + 1)), "break")[1])
+        self.bind("<Return>", lambda _e: self.sel >= 0 and (self.edit(self.sel), "break")[1])
+        self.bind("<KP_Enter>", lambda _e: self.sel >= 0 and (self.edit(self.sel), "break")[1])
+        self.bind("<space>", lambda _e: self.sel >= 0 and (self.edit(self.sel), "break")[1])
+        self.bind("<Key>", self._typed)
+
+    # ---- drawing
+
+    def set_items(self, items: list[NoteItem]) -> None:
+        """Show these items (the editor of one that is still there stays open)."""
+        editing = self.items[self.editing] if 0 <= self.editing < len(self.items) else None
+        self.items = list(items)
+        self.editing = self.items.index(editing) if editing in self.items else -1
+        if self.editing < 0 and self.editor is not None:
+            self.close()
+        self.redraw()
+
+    def _on_configure(self, event: tk.Event) -> None:
+        if event.width != self._width:
+            self._width = event.width
+            self.redraw()
+
+    def wrap_width(self) -> int:
+        return max(40, self._width - self.px(TEXT_X) - self.px(RM_W))
+
+    def redraw(self) -> None:
         self.delete("all")
-        s, r = self.SIZE - 2, 5
-        x0 = y0 = 1
-        pts = [x0 + r, y0, s - r, y0, s, y0, s, y0 + r, s, s - r, s, s, s - r, s, x0 + r, s, x0, s, x0, s - r, x0, y0 + r, x0, y0]
-        if self.checked:
-            self.create_polygon(pts, smooth=True, fill=self.accent, outline=self.accent)
-            self.create_line(5, 9.5, 8, 12.5, 13.5, 6, fill=palette.ON_ACCENT, width=2.2, capstyle="round", joinstyle="round")
+        self.rows = []
+        if not self.items:
+            self.configure(height=1)
+            return
+        fonts = self.page._nfonts
+        font = fonts["item_done" if self.done else "item"]
+        fg = palette.MUTED if self.done else palette.TEXT
+        px, pad = self.px, self.px(ROW_PAD)
+        x_text, wrap, size = px(TEXT_X), self.wrap_width(), px(CHECK)
+        y = pad
+        for i, item in enumerate(self.items):
+            tid = self.create_text(x_text, y, text=item.text, anchor="nw", width=wrap, font=font, fill=fg, tags=(f"t{i}",))
+            _x0, _y0, _x1, y1 = self.bbox(tid)
+            h = max(y1 - y, size)
+            self._draw_check(i, y + px(2), size, hover=i == self.hot)
+            self.create_text(self._width - px(RM_W) + px(4), y + px(2), text="✕", anchor="nw", font=fonts["small"], fill=palette.MUTED if i == self.hot else self.bg, tags=(f"r{i}",))
+            if i == self.sel:
+                self.create_rectangle(x_text - px(3), y - 1, self._width - px(RM_W), y + h + 1, outline=palette.ACCENT, tags=(f"s{i}",))
+            self.rows.append((y, y + h))
+            y += h + 2 * pad
+        self.configure(height=y)
+        if self.editor is not None and 0 <= self.editing < len(self.rows):
+            self._place_editor()
+
+    def _draw_check(self, i: int, y: int, size: int, hover: bool) -> None:
+        self.delete(f"c{i}")
+        s, r, x0, y0 = size - 2, 5, 1, y + 1
+        pts = [x0 + r, y0, x0 + s - r, y0, x0 + s, y0, x0 + s, y0 + r, x0 + s, y0 + s - r, x0 + s, y0 + s, x0 + s - r, y0 + s, x0 + r, y0 + s, x0, y0 + s, x0, y0 + s - r, x0, y0 + r, x0, y0]
+        tag = (f"c{i}",)
+        if self.done:
+            self.create_polygon(pts, smooth=True, fill=self.accent, outline=self.accent, tags=tag)
+            self.create_line(x0 + 4, y0 + 8.5, x0 + 7, y0 + 11.5, x0 + 12.5, y0 + 5, fill=palette.ON_ACCENT, width=2.2, capstyle="round", joinstyle="round", tags=tag)
         else:
-            self.create_polygon(pts, smooth=True, fill=palette.FIELD, outline=self.accent if self.hover else self.muted, width=1.6)
+            self.create_polygon(pts, smooth=True, fill=palette.FIELD, outline=self.accent if hover else palette.MUTED, width=1.6, tags=tag)
+
+    # ---- the pointer
+
+    def row_at(self, y: int) -> int:
+        for i, (y0, y1) in enumerate(self.rows):
+            if y0 - self.px(ROW_PAD) <= y < y1 + self.px(ROW_PAD):
+                return i
+        return -1
+
+    def _set_hot(self, i: int) -> None:
+        if i == self.hot:
+            return
+        old, self.hot = self.hot, i
+        for j, colour in ((old, self.bg), (i, palette.MUTED)):
+            if 0 <= j < len(self.rows):
+                self.itemconfigure(f"r{j}", fill=colour)
+                self._draw_check(j, self.rows[j][0] + self.px(2), self.px(CHECK), hover=j == i)
+
+    def _motion(self, event: tk.Event) -> None:
+        self._set_hot(self.row_at(event.y))
+        self.configure(cursor="hand2" if event.x < self.px(TEXT_X) or event.x >= self._width - self.px(RM_W) else "xterm")
+
+    def _click(self, event: tk.Event) -> str | None:
+        i = self.row_at(event.y)
+        if i < 0:
+            return None
+        page, card, note, item = self.page, self.card, self.note, self.items[i]
+        if event.x < self.px(TEXT_X):
+            page._note_toggle(card, note, item)
+        elif event.x >= self._width - self.px(RM_W):
+            page._note_remove_item(card, note, item)
+        else:
+            self.edit(i, at=(event.x, event.y))
+        return "break"
+
+    def _menu(self, event: tk.Event) -> None:
+        i = self.row_at(event.y)
+        if i >= 0:
+            self.page._note_item_menu(self.card, self.note, self.items[i], event)
+
+    # ---- the keyboard
+
+    def _select(self, i: int) -> None:
+        if i == self.sel or (i >= 0 and not self.items):
+            return
+        self.sel = i if i < len(self.items) else -1
+        self.redraw()
+
+    def _typed(self, event: tk.Event) -> str | None:
+        """A printable key on the picked item starts its editor with that key typed."""
+        if self.sel < 0 or not event.char or not event.char.isprintable() or event.state & 0x4:
+            return None
+        self.edit(self.sel)
+        if self.editor is not None:
+            self.editor.insert("insert", event.char)
+        return "break"
+
+    # ---- the editor
+
+    def edit(self, i: int, at: tuple[int, int] | None = None) -> None:
+        """Open the editor over row `i`; `at` — the click, where the cursor goes (the end without it)."""
+        if not 0 <= i < len(self.items):
+            return
+        if self.editor is not None:
+            if self.editing == i:
+                self.editor.focus_set()
+                return
+            self.close()
+        page, card, note, item, bg = self.page, self.card, self.note, self.items[i], self.bg
+        self.editing = i
+        editor = self.editor = WrapLine(
+            self, item.text, lambda value: page._note_item_edit(note, item, value), font=page._nfonts["item_done" if self.done else "item"],
+            bg=bg, fg=palette.MUTED if self.done else palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT, **editable_look(bg),
+        )
+        page._editable(editor, bg)
+        self.itemconfigure(f"t{i}", state="hidden")
+        self._place_editor()
+        editor.bind("<Return>", lambda _e: (self.close(), card.add_entry.focus_set(), "break")[2])  # type: ignore[attr-defined]
+        editor.bind("<Escape>", lambda _e: (self.close(), card.focus_set(), "break")[2])
+        editor.bind("<Alt-Up>", lambda _e: page._note_move_item(card, note, item, -1))
+        editor.bind("<Alt-Down>", lambda _e: page._note_move_item(card, note, item, +1))
+        editor.bind("<BackSpace>", lambda _e: page._note_backspace_item(card, note, item, editor))
+        editor.bind("<Tab>", lambda _e: (self._neighbour(+1), "break")[1])
+        editor.bind("<Shift-Tab>", lambda _e: (self._neighbour(-1), "break")[1])
+        editor.bind("<FocusOut>", lambda _e: editor.after_idle(self._left), add="+")
+        editor.bind("<Button-3>", lambda e: page._note_item_menu(card, note, item, e))
+        editor.focus_set()
+        if at is not None:
+            editor.update_idletasks()  # laid out first: the index under the click needs the lines
+            top = self.rows[i][0] - self.px(2)  # where the editor was placed (_place_editor)
+            editor.mark_set("insert", editor.index(f"@{at[0] - self.px(TEXT_X) + self.px(3)},{at[1] - top}"))
+        else:
+            editor.cursor_to_end()
+
+    def _place_editor(self) -> None:
+        y0, _y1 = self.rows[self.editing]
+        x = self.px(TEXT_X) - self.px(3)
+        self.editor.place(x=x, y=y0 - self.px(2), width=self._width - self.px(RM_W) - x)  # type: ignore[union-attr]
+        self.editor.lift()  # type: ignore[union-attr]
+
+    def _neighbour(self, step: int) -> None:
+        """Tab / Shift+Tab: edit the next or the previous item; past the last — the “+” row,
+        before the first — the note's text."""
+        i = self.editing + step
+        self.close()
+        if 0 <= i < len(self.items):
+            self.edit(i)
+        elif step > 0:
+            self.card.add_entry.focus_set()  # type: ignore[attr-defined]
+        else:
+            self.card.text_widget.focus_set()  # type: ignore[attr-defined]
+
+    def _left(self) -> None:
+        """The editor lost the focus (a click elsewhere, another window): back to the text.
+        Not while the focus is still here (the app only lost the foreground)."""
+        editor = self.editor
+        if editor is None or not editor.winfo_exists():
+            return
+        try:
+            focus = editor.focus_get()
+        except (KeyError, tk.TclError):
+            focus = None
+        if focus is not editor:
+            self.close()
+
+    def close(self) -> None:
+        """The editor goes; the row shows the text as it is now."""
+        editor, self.editor, self.editing = self.editor, None, -1
+        if editor is None:
+            return
+        if editor.winfo_exists():
+            editor.destroy()
+        if self.winfo_exists():
+            self.redraw()
 
 
 class NotesPage(TabPage):
@@ -263,9 +542,16 @@ class NotesPage(TabPage):
         self.ncanvas.update_idletasks()
         self.ncanvas.yview_moveto(top)
 
-    def _card_size(self, note: Note, card: tk.Frame, avail: int) -> tuple[int, int]:
-        """The width and height of a card in screen pixels: as dragged, else by the columns
-        and the content. Never narrower than CARD_SMALLEST, never wider than the space."""
+    def _avail_width(self) -> int:
+        """The width the cards share."""
+        avail = self.nflow.winfo_width()
+        if avail <= 1:
+            avail = max(CARD_MIN_WIDTH, self.ncanvas.winfo_width() - 48)
+        return avail
+
+    def _card_width(self, note: Note, avail: int) -> int:
+        """The width of a card in screen pixels: as dragged, else by the columns. Never
+        narrower than CARD_SMALLEST, never wider than the space."""
         px = self.app.painter.px
         cols, col = column_width(avail, px(CARD_GAP), px(CARD_MIN_WIDTH))
         if note.width:
@@ -273,8 +559,13 @@ class NotesPage(TabPage):
         else:
             span = min(note.span, cols)
             w = round(col * span + px(CARD_GAP) * (span - 1))
-        w = max(min(px(CARD_SMALLEST), avail), min(w, avail))
-        h = max(px(note.height), self._card_min_height(card)) if note.height else card.winfo_reqheight()
+        return max(min(px(CARD_SMALLEST), avail), min(w, avail))
+
+    def _card_size(self, note: Note, card: tk.Frame, avail: int) -> tuple[int, int]:
+        """The width and height of a card in screen pixels: as dragged, else by the columns
+        and the content."""
+        w = self._card_width(note, avail)
+        h = max(self.app.painter.px(note.height), self._card_min_height(card)) if note.height else card.winfo_reqheight()
         return w, h
 
     def _card_min_height(self, card: tk.Frame) -> int:
@@ -295,11 +586,14 @@ class NotesPage(TabPage):
             self.nempty.grid(row=2, column=0, columnspan=99, sticky="w")
             self.nflow.configure(height=1)
             return
-        avail = self.nflow.winfo_width()
-        if avail <= 1:
-            avail = max(CARD_MIN_WIDTH, self.ncanvas.winfo_width() - 48)
+        avail = self._avail_width()
         cards = [(n, self._ncards.get(n.id)) for n in shown]
         cards = [(n, c) for n, c in cards if c is not None]
+        if any(not c.place_info() for _n, c in cards):
+            # new cards: their requested sizes are known only once their insides are laid
+            # out; placed before that, every card came up at a wrong height and was placed
+            # again on each <Configure> it then sent — nine rounds of layout for one build
+            self.nflow.update_idletasks()
         sizes = [self._card_size(n, c, avail) for n, c in cards]
         spots, total = flow_layout(sizes, avail, self.app.painter.px(CARD_GAP))
         for (_n, card), (w, h), (x, y) in zip(cards, sizes, spots, strict=True):
@@ -321,7 +615,7 @@ class NotesPage(TabPage):
         head = tk.Frame(inner, bg=bg)
         head.pack(fill="x")
         title_var = tk.StringVar(value=note.title)
-        title = tk.Entry(head, textvariable=title_var, font=self._nfonts["title"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT)
+        title = tk.Entry(head, textvariable=title_var, font=self._nfonts["title"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT, **editable_look(bg))
         title.pack(side="left", fill="x", expand=True)
         card.title_entry = title  # type: ignore[attr-defined]
         self._editable(title, bg)
@@ -332,7 +626,7 @@ class NotesPage(TabPage):
         pin.pack(side="right")
 
         # ---- text
-        text = tk.Text(inner, height=2 if note.height else max(2, min(8, note.text.count("\n") + 2)), font=self._nfonts["text"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, wrap="word", undo=True, insertbackground=palette.TEXT, padx=2, pady=4)
+        text = tk.Text(inner, height=2 if note.height else max(2, min(8, note.text.count("\n") + 2)), font=self._nfonts["text"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, wrap="word", undo=True, insertbackground=palette.TEXT, padx=2, pady=4, **editable_look(bg))
         text.insert("1.0", note.text)
         text.edit_modified(False)
         text.pack(fill="both", expand=True, pady=(2, 0))  # a card dragged taller gives the room to the text
@@ -346,25 +640,21 @@ class NotesPage(TabPage):
         checklist = tk.Frame(inner, bg=bg)
         checklist.pack(fill="x", pady=(6, 0))
         card.checklist = checklist  # type: ignore[attr-defined]
-        progress = tk.Frame(checklist, bg=bg)
+        # the bar and the “done / total” count on one canvas (a frame, a label and a canvas before)
+        progress = tk.Canvas(checklist, height=self._nfonts["small_bold"].metrics("linespace") + 2, width=10, bg=bg, highlightthickness=0, bd=0)
+        progress.bind("<Configure>", lambda _e: self._draw_progress(card, note))
         card.progress_row = progress  # type: ignore[attr-defined]
-        count = tk.Label(progress, text="", bg=bg, fg=palette.MUTED, font=self._nfonts["small_bold"])
-        count.pack(side="right", padx=(8, 0))  # packed first, so the bar never squeezes it
-        bar = tk.Canvas(progress, height=4, width=10, bg=bg, highlightthickness=0, bd=0)
-        bar.pack(side="left", fill="x", expand=True, pady=(0, 2))
-        bar.bind("<Configure>", lambda _e: self._draw_progress(card, note))
-        card.progress_bar = bar  # type: ignore[attr-defined]
-        card.progress_count = count  # type: ignore[attr-defined]
-        open_box = tk.Frame(checklist, bg=bg)
-        open_box.pack(fill="x")
-        card.open_box = open_box  # type: ignore[attr-defined]
+        list_width = self._card_width(note, self._avail_width()) - self.app.painter.px(28)  # inside the card's corners and padding
+        open_list = ItemList(self, card, checklist, note, done=False, width=list_width)
+        open_list.pack(fill="x")
+        card.open_list = open_list  # type: ignore[attr-defined]
 
         add_row = tk.Frame(checklist, bg=bg)
         add_row.pack(fill="x", pady=(2, 0))
         add_var = tk.StringVar()
         plus = tk.Label(add_row, text="+", bg=bg, fg=note.accent(), font=self._nfonts["plus"], cursor="hand2", width=1)
         plus.pack(side="left", padx=(1, 7))
-        add = tk.Entry(add_row, textvariable=add_var, font=self._nfonts["item"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT)
+        add = tk.Entry(add_row, textvariable=add_var, font=self._nfonts["item"], bg=bg, fg=palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT, **editable_look(bg))
         add.pack(side="left", fill="x", expand=True)
         self._editable(add, bg)
         Placeholder(add, _("Add item"), bg, var=add_var, padx=2)
@@ -379,18 +669,12 @@ class NotesPage(TabPage):
         card.add_entry = add  # type: ignore[attr-defined]
         card.add_var = add_var  # type: ignore[attr-defined]
 
-        done_head = tk.Frame(checklist, bg=bg)
+        done_head = Strip(checklist, bg)
+        done_head.add("fold", "", self._nfonts["small_bold"], palette.MUTED, command=lambda _e: self._note_fold_done(card, note))
+        done_head.add("clear", _("Clear"), self._nfonts["small"], palette.MUTED, side="right", command=lambda _e: self._note_clear_done(card, note), tip=_("Remove the done items"))
         card.done_head = done_head  # type: ignore[attr-defined]
-        fold = tk.Label(done_head, text="", bg=bg, fg=palette.MUTED, font=self._nfonts["small_bold"], cursor="hand2")
-        fold.pack(side="left")
-        fold.bind("<Button-1>", lambda _e: self._note_fold_done(card, note))
-        card.done_fold = fold  # type: ignore[attr-defined]
-        clear = tk.Label(done_head, text=_("Clear"), bg=bg, fg=palette.MUTED, font=self._nfonts["small"], cursor="hand2")
-        clear.pack(side="right")
-        clear.bind("<Button-1>", lambda _e: self._note_clear_done(card, note))
-        Tooltip(clear, _("Remove the done items"))
-        done_box = tk.Frame(checklist, bg=bg)
-        card.done_box = done_box  # type: ignore[attr-defined]
+        done_list = ItemList(self, card, checklist, note, done=True, width=list_width)
+        card.done_list = done_list  # type: ignore[attr-defined]
         self._render_checklist(card, note)
 
         # ---- files
@@ -401,24 +685,20 @@ class NotesPage(TabPage):
                 self._build_file_row(files, note, att, bg)
 
         # ---- footer
-        foot = tk.Frame(inner, bg=bg)
+        # the footer on one canvas: the stamp, the day, the carry-over link and the three glyphs
+        foot = Strip(inner, bg, pady=self.app.painter.px(2))
         foot.pack(fill="x", pady=(10, 0))
-        stamp = tk.Label(foot, text=time.strftime("%H:%M", time.localtime(note.updated)), bg=bg, fg=palette.MUTED, font=self._nfonts["small"])
-        stamp.pack(side="left")
+        fonts = self._nfonts
+        foot.add("stamp", time.strftime("%H:%M", time.localtime(note.updated)), fonts["small"], palette.MUTED, cursor="")
         if self._across_days():
-            tk.Label(foot, text=fmt_day(note.date), bg=bg, fg=palette.MUTED, font=self._nfonts["small"]).pack(side="left", padx=(10, 0))
+            foot.add("day", fmt_day(note.date), fonts["small"], palette.MUTED, padx=10, cursor="")
         if note.undone_items() and note.date != today():
-            carry = tk.Label(foot, text=_("⤴ to today"), bg=bg, fg=note.accent(), cursor="hand2", font=self._nfonts["small_bold"])
-            carry.pack(side="left", padx=(10, 0))
-            carry.bind("<Button-1>", lambda _e: self._note_carry_over(note))
-            Tooltip(carry, _("Undone items as a new card for today"))
-        more = glyph_button(foot, "⋯", bg, self._nfonts["icon"], None, _("Card settings"))
-        more.bind("<Button-1>", lambda e: self._note_menu(note, e))
-        more.pack(side="right")
-        colour = glyph_button(foot, "🎨", bg, self._nfonts["icon"], None, _("Card colour"))
-        colour.bind("<Button-1>", lambda e: self._note_color_menu(note, e))
-        colour.pack(side="right", padx=(0, 6))
-        glyph_button(foot, "📎", bg, self._nfonts["icon"], lambda: self._note_attach(note), _("Attach files")).pack(side="right", padx=(0, 6))
+            foot.add("carry", _("⤴ to today"), fonts["small_bold"], note.accent(), padx=10, command=lambda _e: self._note_carry_over(note), tip=_("Undone items as a new card for today"))
+        foot.add("more", "⋯", fonts["icon"], palette.MUTED, side="right", padx=3, command=lambda e: self._note_menu(note, e), tip=_("Card settings"), hover=palette.TEXT)
+        foot.add("colour", "🎨", fonts["icon"], palette.MUTED, side="right", padx=9, command=lambda e: self._note_color_menu(note, e), tip=_("Card colour"), hover=palette.TEXT)
+        foot.add("attach", "📎", fonts["icon"], palette.MUTED, side="right", padx=9, command=lambda _e: self._note_attach(note), tip=_("Attach files"), hover=palette.TEXT)
+        foot.layout()
+        foot.bind("<Button-3>", lambda e: self._note_menu(note, e))
         self._resizable(card, note, text)
         card.bind("<Button-3>", lambda e: self._note_menu(note, e))
         inner.bind("<Button-3>", lambda e: self._note_menu(note, e))
@@ -511,16 +791,9 @@ class NotesPage(TabPage):
     # ---- checklist
 
     def _render_checklist(self, card: tk.Frame, note: Note) -> None:
-        """(Re)draw the item rows of a card: open items above the “+” row, done ones below."""
-        for box in (card.open_box, card.done_box):  # type: ignore[attr-defined]
-            for child in box.winfo_children():
-                child.destroy()
-        card.item_rows = {}  # type: ignore[attr-defined]  # id(item) → its row
-        for item in note.open_items():
-            self._build_note_item_row(card, card.open_box, note, item)  # type: ignore[attr-defined]
-        if not note.hide_done:
-            for item in note.done_items():
-                self._build_note_item_row(card, card.done_box, note, item)  # type: ignore[attr-defined]
+        """(Re)draw the items of a card: open items above the “+” row, done ones below."""
+        card.open_list.set_items(note.open_items())  # type: ignore[attr-defined]
+        card.done_list.set_items([] if note.hide_done else note.done_items())  # type: ignore[attr-defined]
         self._update_done_head(card, note)
         self._update_note_progress(card, note)
 
@@ -528,94 +801,46 @@ class NotesPage(TabPage):
         """The “Done (n)” header and the box under it: shown when there are done items."""
         done = note.done_items()
         card.done_head.pack_forget()  # type: ignore[attr-defined]
-        card.done_box.pack_forget()  # type: ignore[attr-defined]
+        card.done_list.pack_forget()  # type: ignore[attr-defined]
         if done:
             arrow = "▸" if note.hide_done else "▾"
-            card.done_fold.config(text=f"{arrow} " + _("Done ({n})").format(n=len(done)))  # type: ignore[attr-defined]
+            card.done_head.set_text("fold", f"{arrow} " + _("Done ({n})").format(n=len(done)))  # type: ignore[attr-defined]
             card.done_head.pack(fill="x", pady=(8, 2))  # type: ignore[attr-defined]
             if not note.hide_done:
-                card.done_box.pack(fill="x")  # type: ignore[attr-defined]
+                card.done_list.pack(fill="x")  # type: ignore[attr-defined]
 
     def _move_item_row(self, card: tk.Frame, note: Note, item: NoteItem) -> None:
-        """An item was ticked or unticked: its row alone is made anew in the other box, at
-        its place there; the rest of the card stays as it is."""
-        old = card.item_rows.pop(id(item), None)  # type: ignore[attr-defined]
-        if old is not None:
-            old.destroy()
-        if item.done and note.hide_done:
-            return  # done items are folded away
-        box = card.done_box if item.done else card.open_box  # type: ignore[attr-defined]
-        siblings = note.done_items() if item.done else note.open_items()
-        after = siblings[siblings.index(item) + 1 :]
-        before = next((card.item_rows[id(s)] for s in after if id(s) in card.item_rows), None)  # type: ignore[attr-defined]
-        self._build_note_item_row(card, box, note, item, before=before)
-
-    def _build_note_item_row(self, card: tk.Frame, box: tk.Frame, note: Note, item: NoteItem, before: tk.Frame | None = None) -> None:
-        bg = note.bg()
-        row = tk.Frame(box, bg=bg)
-        row.pack(fill="x", pady=1, **({"before": before} if before is not None else {}))
-        card.item_rows[id(item)] = row  # type: ignore[attr-defined]
-        chk = CheckBox(row, bg, note.accent(), palette.MUTED, item.done, lambda: self._note_toggle(card, note, item))
-        chk.pack(side="left", anchor="n", padx=(0, 8), pady=(3, 0))  # by the first line of a wrapped item
-        # a long item wraps inside the card instead of running past its edge
-        entry = WrapLine(
-            row, item.text, lambda value: self._note_item_edit(note, item, value), font=self._nfonts["item_done" if item.done else "item"],
-            bg=bg, fg=palette.MUTED if item.done else palette.TEXT, relief="flat", bd=0, insertbackground=palette.TEXT,
-        )
-        entry.pack(side="left", fill="x", expand=True)
-        self._editable(entry, bg)
-        entry.bind("<Return>", lambda _e: (card.add_entry.focus_set(), "break")[1])  # type: ignore[attr-defined]
-        entry.bind("<Alt-Up>", lambda _e: self._note_move_item(card, note, item, -1))
-        entry.bind("<Alt-Down>", lambda _e: self._note_move_item(card, note, item, +1))
-        entry.bind("<BackSpace>", lambda _e: self._note_backspace_item(card, note, item, entry))
-        rm = tk.Label(row, text="✕", bg=bg, fg=bg, cursor="hand2", font=self._nfonts["small"])
-        rm.pack(side="right", padx=(6, 0))
-        rm.bind("<Button-1>", lambda _e: self._note_remove_item(card, note, item))
-        rm.bind("<Enter>", lambda _e: rm.config(fg=palette.DANGER))
-
-        def hover(on: bool) -> None:
-            if not on:  # leaving into a child of the row still counts as inside
-                under = row.winfo_containing(*row.winfo_pointerxy())
-                while under is not None and under is not row:
-                    under = under.master
-                on = under is row
-            rm.config(fg=palette.MUTED if on else bg)
-
-        for w in (row, entry, chk):
-            w.bind("<Enter>", lambda _e: hover(True), add="+")
-            w.bind("<Leave>", lambda _e: hover(False), add="+")
-        menu_cmd = lambda e: self._note_item_menu(card, note, item, e)  # noqa: E731
-        for w in (row, entry):
-            w.bind("<Button-3>", menu_cmd)
+        """An item was ticked or unticked: both lists are drawn again (canvas items, cheap)."""
+        card.open_list.set_items(note.open_items())  # type: ignore[attr-defined]
+        card.done_list.set_items([] if note.hide_done else note.done_items())  # type: ignore[attr-defined]
 
     def _update_note_progress(self, card: tk.Frame, note: Note) -> None:
-        done, total = note.progress()
+        _done, total = note.progress()
         row = card.progress_row  # type: ignore[attr-defined]
         if not total:
             row.pack_forget()
             return
         if not row.winfo_ismapped():
-            row.pack(fill="x", before=card.open_box, pady=(0, 4))  # type: ignore[attr-defined]
-        label = card.progress_count  # type: ignore[attr-defined]
-        if done == total:
-            label.config(text=_("✓ {done} / {total}").format(done=done, total=total), fg=palette.SUCCESS)
-        else:
-            label.config(text=f"{done} / {total}", fg=palette.MUTED)
+            row.pack(fill="x", before=card.open_list, pady=(0, 4))  # type: ignore[attr-defined]
         self._draw_progress(card, note)
 
     def _draw_progress(self, card: tk.Frame, note: Note) -> None:
-        bar = card.progress_bar  # type: ignore[attr-defined]
+        """The bar and the “done / total” count on the progress canvas."""
+        bar = card.progress_row  # type: ignore[attr-defined]
         done, total = note.progress()
-        width = bar.winfo_width()
+        width, height = bar.winfo_width(), int(bar.cget("height"))
         bar.delete("all")
         if not total or width <= 1:
             return
-        bar.create_rectangle(0, 0, width, 4, fill=palette.BORDER, outline="")
-        filled = int(width * done / total)
+        px = self.app.painter.px
+        text = _("✓ {done} / {total}").format(done=done, total=total) if done == total else f"{done} / {total}"
+        count = bar.create_text(width, height // 2, text=text, anchor="e", font=self._nfonts["small_bold"], fill=palette.SUCCESS if done == total else palette.MUTED)
+        x0, _y0, _x1, _y1 = bar.bbox(count)
+        span, y = max(0, x0 - px(8)), height // 2
+        bar.create_rectangle(0, y - 2, span, y + 2, fill=palette.BORDER, outline="")
+        filled = int(span * done / total)
         if filled:
-            bar.create_rectangle(0, 0, filled, 4, fill=palette.SUCCESS if done == total else note.accent(), outline="")
-
-    # ---- files
+            bar.create_rectangle(0, y - 2, filled, y + 2, fill=palette.SUCCESS if done == total else note.accent(), outline="")
 
     def _build_file_row(self, parent: tk.Frame, note: Note, att: Attachment, bg: str) -> None:
         exists = att.exists()
@@ -679,8 +904,9 @@ class NotesPage(TabPage):
     # ---- hints in empty fields
 
     def _editable(self, widget: tk.Entry | tk.Text, bg: str) -> None:
-        """A field in a card looks like a field: a border on hover, blue while typing."""
-        widget.config(highlightthickness=1, highlightbackground=bg, highlightcolor=palette.ACCENT, cursor="xterm")
+        """A field in a card looks like a field: a border on hover, blue while typing. The
+        look itself is given at creation (`editable_look`): set afterwards, it laid the
+        packed field out once more — two milliseconds each, a hundred fields a tab."""
         widget.bind("<Enter>", lambda _e: widget.config(highlightbackground=palette.BORDER), add="+")
         widget.bind("<Leave>", lambda _e: widget.config(highlightbackground=bg), add="+")
 
@@ -688,7 +914,11 @@ class NotesPage(TabPage):
     @staticmethod
     def _grow_text(text: tk.Text) -> None:
         lines = int(text.index("end-1c").split(".")[0])
-        text.config(height=max(2, min(12, lines + 1)))
+        height = max(2, min(12, lines + 1))
+        # only a real change: Tk lays the whole text out again on any configure, even to
+        # the same height — a tenth of a second per key in a long note
+        if int(text.cget("height")) != height:
+            text.config(height=height)
 
     # ---- changes
 
@@ -739,7 +969,7 @@ class NotesPage(TabPage):
         if item is None:
             return "break"
         var.set("")
-        self._build_note_item_row(card, card.open_box, note, item)  # type: ignore[attr-defined]
+        card.open_list.set_items(note.open_items())  # type: ignore[attr-defined]
         self._update_note_progress(card, note)
         self._note_changed(note, refresh_days=True)
         if keep_focus:
@@ -787,9 +1017,7 @@ class NotesPage(TabPage):
 
     def _note_remove_item(self, card: tk.Frame, note: Note, item: NoteItem) -> None:
         note.remove_item(item)
-        row = card.item_rows.pop(id(item), None)  # type: ignore[attr-defined]
-        if row is not None:
-            row.destroy()
+        self._move_item_row(card, note, item)
         self._update_done_head(card, note)
         self._update_note_progress(card, note)
         self._note_changed(note, refresh_days=True)
@@ -800,30 +1028,23 @@ class NotesPage(TabPage):
             return None
         same = note.done_items() if item.done else note.open_items()
         idx = same.index(item) if item in same else 0
+        lst = card.done_list if item.done else card.open_list  # type: ignore[attr-defined]
+        lst.close()  # its <FocusOut> must not run on an item that is gone
         self._note_remove_item(card, note, item)
-        box = card.done_box if item.done else card.open_box  # type: ignore[attr-defined]
-        rows = box.winfo_children()
-        target = rows[idx - 1] if idx > 0 and rows else None
-        if target is not None:
-            entry = next((w for w in target.winfo_children() if isinstance(w, WrapLine)), None)
-            if entry is not None:
-                entry.focus_set()
-                entry.cursor_to_end()
+        if idx > 0 and lst.items:
+            lst.edit(idx - 1)
         else:
             card.add_entry.focus_set()  # type: ignore[attr-defined]
         return "break"
 
     def _note_move_item(self, card: tk.Frame, note: Note, item: NoteItem, delta: int) -> str:
         if note.move_item(item, delta):
+            lst = card.done_list if item.done else card.open_list  # type: ignore[attr-defined]
+            lst.close()
             self._render_checklist(card, note)
             self._note_changed(note)
-            box = card.done_box if item.done else card.open_box  # type: ignore[attr-defined]
-            same = note.done_items() if item.done else note.open_items()
-            rows = box.winfo_children()
-            if item in same and same.index(item) < len(rows):
-                entry = next((w for w in rows[same.index(item)].winfo_children() if isinstance(w, WrapLine)), None)
-                if entry is not None:
-                    entry.focus_set()
+            if item in lst.items:
+                lst.edit(lst.items.index(item))
         return "break"
 
     def _note_item_menu(self, card: tk.Frame, note: Note, item: NoteItem, event: tk.Event) -> None:

@@ -24,8 +24,10 @@ Settings → General → Start opens the app when you sign in (per user: the Run
 Windows, a LaunchAgent on macOS, ~/.config/autostart elsewhere), optionally minimized;
 it still asks for the master password:
 
-- Windows — `Daykeeper.exe`. On the first start Windows may warn about an unknown
-  publisher: the file is not signed.
+- Windows — `Daykeeper-win64.zip`: unpack anywhere and start `Daykeeper\Daykeeper.exe`
+  (the window is up in well under a second). Or `Daykeeper.exe`, the same app in one
+  file, which unpacks itself on every start and so takes a couple of seconds to open.
+  On the first start Windows may warn about an unknown publisher: the files are not signed.
 - macOS (Apple Silicon: M1 and later) — `Daykeeper-macos.zip`, unpack and drag
   `Daykeeper.app` to Applications. The app is not signed with an Apple certificate, so
   macOS stops the first start. Once, either way:
@@ -53,7 +55,8 @@ Linux: from source only (the same command; `python3-tkinter` from the distributi
 suite runs there under Xvfb in CI; there is no Linux build on the Releases page.
 
 Build it yourself — `build.bat` on Windows (one windowless file, `dist\Daykeeper.exe`, which
-carries the console helper `dist\daykeeper-cli\` inside),
+carries the console helper `dist\daykeeper-cli\` inside, and the same app as a folder,
+`dist\Daykeeper-win64.zip`, which starts faster),
 `build.sh` on macOS (`dist/Daykeeper.app`); both install the build tools from
 `requirements-build.txt` (exact versions with hashes) and print the SHA256 of the result.
 The icon (`assets/icon.ico`, `.icns`, `.png` — the file icon and the window icon) is

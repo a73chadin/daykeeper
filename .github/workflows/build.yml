@@ -57,11 +57,19 @@ jobs:
           Set-Content -NoNewline -Encoding ascii dist/daykeeper-cli/build-id.txt "${{ github.sha }}"
           python -m PyInstaller --noconfirm --clean --onefile --noconsole --noupx --name Daykeeper --icon assets/icon.ico --add-data "assets;assets" --add-data "dist/daykeeper-cli;daykeeper-cli" main.py
           if ($LASTEXITCODE) { exit 1 }
+          # the same app as a folder: it opens its window in well under a second, where the
+          # one-file exe unpacks itself on every start (about two seconds, more with antivirus)
+          python -m PyInstaller --noconfirm --clean --onedir --noconsole --noupx --name Daykeeper --icon assets/icon.ico --add-data "assets;assets" --add-data "dist/daykeeper-cli;daykeeper-cli" --distpath dist/Daykeeper-win64 --workpath build/Daykeeper-win64 main.py
+          if ($LASTEXITCODE) { exit 1 }
+          python -c "import shutil; shutil.make_archive('dist/Daykeeper-win64', 'zip', 'dist/Daykeeper-win64')"
+          if ($LASTEXITCODE) { exit 1 }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Daykeeper-windows
-          path: dist/Daykeeper.exe
+          path: |
+            dist/Daykeeper.exe
+            dist/Daykeeper-win64.zip
 
   macos:
     needs: lint
@@ -123,9 +131,9 @@ jobs:
       - name: Checksums
         run: |
           mkdir out
-          cp artifacts/Daykeeper-windows/Daykeeper.exe artifacts/Daykeeper-macos/Daykeeper-macos.zip out/
+          cp artifacts/Daykeeper-windows/Daykeeper.exe artifacts/Daykeeper-windows/Daykeeper-win64.zip artifacts/Daykeeper-macos/Daykeeper-macos.zip out/
           cd out
-          sha256sum Daykeeper.exe Daykeeper-macos.zip > SHA256SUMS.txt
+          sha256sum Daykeeper.exe Daykeeper-win64.zip Daykeeper-macos.zip > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Provenance
@@ -136,12 +144,14 @@ jobs:
         with:
           subject-path: |
             out/Daykeeper.exe
+            out/Daykeeper-win64.zip
             out/Daykeeper-macos.zip
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             out/Daykeeper.exe
+            out/Daykeeper-win64.zip
             out/Daykeeper-macos.zip
             out/SHA256SUMS.txt
           body_path: CHANGELOG.md

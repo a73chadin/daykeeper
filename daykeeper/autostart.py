@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from xml.sax.saxutils import escape
 
 NAME = "Daykeeper"
 MINIMIZED = "--minimized"  # the app starts as an icon in the taskbar: the unlock screen waits there
@@ -94,6 +93,8 @@ class FileEntry:
 
 
 def plist(args: list[str]) -> str:
+    from xml.sax.saxutils import escape  # here, not at the top: it cost 70 ms of every start for this one line
+
     items = "".join(f"\n        <string>{escape(a)}</string>" for a in args)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

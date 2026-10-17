@@ -5,8 +5,6 @@ No tkinter: tested on a temporary folder."""
 from __future__ import annotations
 
 import json
-import shutil
-import tempfile
 import time
 from pathlib import Path
 
@@ -25,6 +23,8 @@ COPY_SWEEP_SEC = 24 * 3600  # a copy folder older than this was left by a crash:
 def is_preview_copy(vault_path: Path, tempdir: Path | None = None) -> bool:
     """The vault sits in a `daykeeper-copy-*` folder right under the temp directory: a
     duplicate made for a look, and nothing to keep once the look is over."""
+    import tempfile
+
     folder = Path(vault_path).parent
     try:
         base = (tempdir or Path(tempfile.gettempdir())).resolve()
@@ -38,6 +38,8 @@ def remove_preview_copy(vault_path: Path, tempdir: Path | None = None) -> bool:
     True when it was one. The preview process calls this when its window closes."""
     if not is_preview_copy(vault_path, tempdir):
         return False
+    import shutil
+
     shutil.rmtree(Path(vault_path).parent, ignore_errors=True)
     return True
 
@@ -45,6 +47,9 @@ def remove_preview_copy(vault_path: Path, tempdir: Path | None = None) -> bool:
 def sweep_preview_copies(tempdir: Path | None = None, older_than: float = COPY_SWEEP_SEC, now: float | None = None) -> int:
     """Remove `daykeeper-copy-*` folders older than `older_than` seconds (a preview that
     crashed never removed its own); the number removed."""
+    import shutil
+    import tempfile
+
     base = tempdir or Path(tempfile.gettempdir())
     now = now if now is not None else time.time()
     removed = 0
