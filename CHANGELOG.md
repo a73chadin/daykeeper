@@ -6,7 +6,7 @@
 > run of every screen, but not yet used day to day. Keep a copy of the vault
 > (Settings → Data) before trying it; 1.1.1 stays the latest stable release.
 
-Every finding of `AUDIT_REPORT.md` (section 9 there lists each with its test and probe).
+Every finding of the October 2026 code audit, each with a test and a probe.
 
 **Look**
 - The restart after a theme switch failed in the one-file Windows build: the new copy

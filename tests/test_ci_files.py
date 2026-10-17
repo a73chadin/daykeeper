@@ -1,4 +1,4 @@
-"""The build and CI files as the audit left them (M7, L27, L16, L17 of AUDIT_REPORT.md): tests
+"""The build and CI files as the October 2026 audit left them: tests
 on every push, the dependency audit, the provenance step, one Python version, the macOS
 bundle's version. Read as text — the workflows cannot run here, but a line that goes
 missing should fail a test, not a release."""

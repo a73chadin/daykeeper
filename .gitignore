@@ -7,3 +7,11 @@ __pycache__/
 *.pkv
 *.jsonl
 .pytest_cache/
+# working notes stay out of the repository
+AUDIT*.md
+PLAN*.md
+REPORT*.md
+*_REPORT.md
+*-REPORT.md
+PROGRESS*.md
+TODO*.md
