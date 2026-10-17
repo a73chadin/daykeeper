@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import time
 import tkinter as tk
-import webbrowser
 from tkinter import ttk
 
 from . import siteicon
@@ -457,6 +456,8 @@ class BookmarksPage(TabPage):
                 entry = self.vault.entry_by_id(bm.entry_id)
                 if entry is not None and has_secret(entry):
                     self.app.copy_to_clipboard(entry_secret(entry))
+            import webbrowser  # 20 ms at start otherwise, for the first click on a tile
+
             webbrowser.open(bm.url)
             bm.opened = time.time()
             self.app.mark_dirty(None)  # no tile shows the stamp

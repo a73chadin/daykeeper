@@ -12,14 +12,11 @@ rest is pure and unit-tested.
 
 from __future__ import annotations
 
-import http.client
 import json
-import ssl
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
+from typing import Any
 
 from .settings import number
 
@@ -65,12 +62,18 @@ def web_url(value) -> str:
     return url if urllib.parse.urlsplit(url).scheme.lower() in ("http", "https") else ""
 
 
-class _SameHostRedirects(urllib.request.HTTPRedirectHandler):
-    """urllib copies every header, the token too, onto the redirected request."""
+def _same_host_redirects():
+    """urllib copies every header, the token too, onto the redirected request. The
+    network modules (urllib.request, http.client, ssl: 50 ms) are imported on the first
+    check, not at start."""
+    import urllib.request
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        _token_may_go(newurl, req.full_url)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+    class SameHostRedirects(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            _token_may_go(newurl, req.full_url)
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    return SameHostRedirects
 
 
 class GitLabError(Exception):
@@ -150,13 +153,17 @@ class GitLabClient:
         self.token = token
         self.timeout = timeout
         self._fetch = fetch or self._http
-        self._conn: http.client.HTTPConnection | None = None
+        self._conn: Any = None  # an http.client.HTTPConnection, imported on the first request; the tests put a fake in
         self._conn_key: tuple[str, str] = ("", "")
 
     def _http(self, url: str, headers: dict) -> tuple[int, bytes]:
         """One kept-alive connection for the whole check. urllib asks the server to close
         the connection after each answer (Connection: close), and some GitLab front ends
         then sometimes send no answer at all: the check hung until the read timeout."""
+        import http.client
+        import ssl
+        import urllib.request
+
         if urllib.request.getproxies().get(urllib.parse.urlsplit(url).scheme):
             return self._urlopen(url, headers)  # a system proxy: urllib knows how to use it
         for attempt in (1, 2):  # a kept-alive connection the server dropped: one fresh try
@@ -171,6 +178,9 @@ class GitLabClient:
         raise AssertionError("unreachable")
 
     def _request(self, url: str, headers: dict, redirects: int = 3) -> tuple[int, bytes]:
+        import http.client
+        import ssl
+
         _token_may_go(url, self.base)
         parts = urllib.parse.urlsplit(url)
         key = (parts.scheme, parts.netloc)
@@ -196,9 +206,13 @@ class GitLabClient:
         self._conn = None
 
     def _urlopen(self, url: str, headers: dict) -> tuple[int, bytes]:
+        import ssl
+        import urllib.error
+        import urllib.request
+
         _token_may_go(url, self.base)
         req = urllib.request.Request(url, headers=headers)  # noqa: S310 — https only, checked by _token_may_go above
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl.create_default_context()), _SameHostRedirects)
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl.create_default_context()), _same_host_redirects())
         try:
             with opener.open(req, timeout=self.timeout) as resp:
                 return resp.status, resp.read()
