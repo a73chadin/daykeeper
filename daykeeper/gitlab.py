@@ -235,7 +235,8 @@ class GitLabClient:
 
     def _request(self, url: str, headers: dict, redirects: int = 3) -> tuple[int, bytes]:
         import http.client
-        import ssl
+
+        from . import tls
 
         _token_may_go(url, self.base)
         parts = urllib.parse.urlsplit(url)
@@ -243,7 +244,7 @@ class GitLabClient:
         if self._conn is None or self._conn_key != key:
             self.close()
             if parts.scheme == "https":
-                self._conn = http.client.HTTPSConnection(parts.netloc, timeout=self.timeout, context=ssl.create_default_context())
+                self._conn = http.client.HTTPSConnection(parts.netloc, timeout=self.timeout, context=tls.context())
             else:
                 self._conn = http.client.HTTPConnection(parts.netloc, timeout=self.timeout)
             self._conn_key = key
@@ -266,9 +267,11 @@ class GitLabClient:
         import urllib.error
         import urllib.request
 
+        from . import tls
+
         _token_may_go(url, self.base)
         req = urllib.request.Request(url, headers=headers)  # noqa: S310 — https only, checked by _token_may_go above
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl.create_default_context()), _same_host_redirects())
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=tls.context()), _same_host_redirects())
         try:
             with opener.open(req, timeout=self.timeout) as resp:
                 return resp.status, resp.read()

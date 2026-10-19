@@ -34,8 +34,12 @@ TICK_MS = 3_600_000  # then once an hour the daily gate is asked (a computer lef
 PROGRESS_MS = 100
 
 
-def reason_text(reason: str, executable: Path) -> str:
+def reason_text(reason: str, executable: Path, platform: str = sys.platform) -> str:
     """update.why_not in words."""
+    if reason == "readonly" and platform == "darwin":
+        app = update.app_location(platform, executable)
+        folder = app.parent if app is not None else executable.parent
+        return _("Daykeeper cannot write to the folder that holds Daykeeper.app ({folder}). Move Daykeeper.app to a folder of your own, such as Applications, and update again.").format(folder=folder)
     if reason == "preview":
         return _("This is a preview copy: updates are installed from the main window.")
     if reason == "source":
@@ -130,15 +134,16 @@ class UpdateWatch(QObject):
         if self.state == "checking":
             return
         self.state, self.error = "checking", ""
-        self.window.session.write_settings({update.SETTING_CHECKED: self.now()})
         self.changed.emit()
         http, pre = self.http, self.prereleases
         run_in_thread(lambda: update.check(http, __version__, pre), partial(self._checked, manual), owner=self, name="update-check")
 
     def _checked(self, manual: bool, result: Any, error: BaseException | None) -> None:
         if error is not None:
+            # not stamped: the daily gate stays open, and the hourly ticker tries again
             self.state, self.error = "error", str(error) or type(error).__name__
         else:
+            self.window.session.write_settings({update.SETTING_CHECKED: self.now()})
             self.available = result
             self.state = "latest" if result is None else ""
             if result is not None and not manual:
@@ -164,7 +169,7 @@ class UpdateWatch(QObject):
 
     def blocked(self) -> str:
         """Why this copy must not update itself, in words; "" — it may."""
-        return reason_text(update.why_not(self.frozen, bool(getattr(self.window, "preview", False)), self.platform, self.executable), self.executable)
+        return reason_text(update.why_not(self.frozen, bool(getattr(self.window, "preview", False)), self.platform, self.executable), self.executable, self.platform)
 
     def open_dialog(self) -> UpdateDialog | None:
         release = self.available
@@ -292,7 +297,16 @@ class UpdateDialog(Dialog):
             return
         if error is not None:
             self.go.setEnabled(True)
-            self._say(_("The update was refused: {reason}. Nothing was changed, and the download was deleted.").format(reason=str(error) or type(error).__name__), "error")
+            reason = str(error) or type(error).__name__
+            if isinstance(error, update.UpdateError):
+                self._say(_("The update was refused: {reason}. Nothing was changed, and the download was deleted.").format(reason=reason), "error")
+            else:  # a disk or system failure, not a check that said no
+                self._say(_("Could not install the update: {reason}. Nothing was changed, and the download was deleted.").format(reason=getattr(error, "strerror", None) or reason), "error")
+            return
+        if self.shell.vault is None:  # locked while the download ran: nothing starts behind the lock
+            discard(prepared)
+            self.go.setEnabled(True)
+            self._say(_("The vault was locked, so nothing was updated. The download was deleted."), "error")
             return
         if not self._save():
             discard(prepared)

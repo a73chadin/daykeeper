@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from pathlib import Path, PurePosixPath
 from unittest import mock
@@ -26,6 +27,46 @@ from tests.update_fakes import FakeHttp, SigningPair, release_json, signed_relea
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import sign_release  # noqa: E402
+
+
+class TlsTest(unittest.TestCase):
+    """daykeeper/tls.py: certifi's CA list on a frozen macOS build, the system's elsewhere
+    (a fake certifi and a fake ssl: nothing is installed or opened)."""
+
+    def contexts(self, platform: str, frozen: bool) -> list[dict]:
+        from daykeeper import tls
+
+        made: list[dict] = []
+        fake_certifi = types.ModuleType("certifi")
+        fake_certifi.where = lambda: "/Applications/Daykeeper.app/Contents/Frameworks/certifi/cacert.pem"  # type: ignore[attr-defined]
+        with mock.patch.dict(sys.modules, {"certifi": fake_certifi}), mock.patch.object(tls.ssl, "create_default_context", side_effect=lambda **kw: made.append(kw) or object()):
+            tls.context(platform, frozen)
+        return made
+
+    def test_a_frozen_mac_build_trusts_certifi(self):
+        self.assertEqual(self.contexts("darwin", True), [{"cafile": "/Applications/Daykeeper.app/Contents/Frameworks/certifi/cacert.pem"}])
+        self.assertEqual(self.contexts("darwin", False), [{}], "a run from source: the system's store")
+        self.assertEqual(self.contexts("win32", True), [{}], "Windows: the system's store")
+
+    def test_the_update_check_uses_it(self):
+        from daykeeper import tls
+
+        sentinel = object()
+        handlers: list = []
+
+        class Opener:
+            def open(self, req, timeout):
+                return io.BytesIO(b"{}")
+
+        def build(*hs):
+            handlers.extend(hs)
+            return Opener()
+
+        with mock.patch.object(tls, "context", return_value=sentinel) as ctx, mock.patch("urllib.request.HTTPSHandler", side_effect=lambda context: ("https", context)), \
+                mock.patch("urllib.request.build_opener", side_effect=build):
+            update.Http().get(update.LATEST_URL)
+        ctx.assert_called_once_with()
+        self.assertEqual(handlers[0], ("https", sentinel))
 
 
 class VersionTest(unittest.TestCase):
@@ -162,14 +203,38 @@ class SignatureTest(unittest.TestCase):
             with self.assertRaises(update.UpdateError):
                 update.verify_signature(data, junk, self.key.public)
 
-    def test_the_release_key_is_the_one_the_app_carries(self):
-        self.assertEqual(len(base64.b64decode(update.PUBLIC_KEY)), 32)
+    def test_the_release_keys_are_the_ones_the_app_carries(self):
+        self.assertIsInstance(update.PUBLIC_KEYS, tuple)
+        self.assertGreaterEqual(len(update.PUBLIC_KEYS), 1)
+        self.assertEqual(len(set(update.PUBLIC_KEYS)), len(update.PUBLIC_KEYS), "no key twice")
+        for key in update.PUBLIC_KEYS:
+            self.assertEqual(len(base64.b64decode(key, validate=True)), 32)
+        self.assertEqual(update.PUBLIC_KEYS[0], "PfX6chME57winjkX63RGCzrV8Ey+owju5vhriuDzrdM=", "the key every release so far is signed with")
         with self.assertRaises(update.UpdateError):
-            update.verify_signature(b"x", self.key.sign(b"x"))  # a test key never passes for the release key
+            update.verify_signature(b"x", self.key.sign(b"x"))  # a test key never passes for the release keys
 
-    def test_the_sums_file(self):
+    def test_a_signature_by_any_of_the_keys_holds(self):
+        current, spare, stranger = SigningPair(), SigningPair(), SigningPair()
+        data = b"# daykeeper v9.0.0\n"
+        with mock.patch.object(update, "PUBLIC_KEYS", (current.public, spare.public)):
+            update.verify_signature(data, current.sign(data))
+            update.verify_signature(data, spare.sign(data))
+            with self.assertRaises(update.UpdateError):
+                update.verify_signature(data, stranger.sign(data))
+            with self.assertRaises(update.UpdateError):
+                update.verify_signature(data + b"x", spare.sign(data))
+        update.verify_signature(data, spare.sign(data), (current.public, spare.public))
+        with self.assertRaises(update.UpdateError):
+            update.verify_signature(data, spare.sign(data), current.public)
+
+    def test_the_sums_file_lines_and_its_version_line(self):
         h = "ab" * 32
-        self.assertEqual(update.parse_sums(f"{h}  Daykeeper-win64.zip\n{h.upper()} *Daykeeper 2.dmg\nnoise\n"), {"Daykeeper-win64.zip": h, "Daykeeper 2.dmg": h})
+        text = f"# daykeeper v2.1.0\n{h}  Daykeeper-win64.zip\n{h.upper()} *Daykeeper 2.dmg\nnoise\n"
+        self.assertEqual(update.parse_sums(text), {"Daykeeper-win64.zip": h, "Daykeeper 2.dmg": h})
+        self.assertEqual(update.sums_tag(text), "v2.1.0")
+        self.assertIsNone(update.sums_tag(f"{h}  Daykeeper-win64.zip\n# daykeeper v2.1.0\n"), "only the first line counts")
+        self.assertIsNone(update.sums_tag("# daykeeper \n"))
+        self.assertIsNone(update.sums_tag(""))
 
 
 class AssetPickTest(unittest.TestCase):
@@ -185,8 +250,8 @@ class AssetPickTest(unittest.TestCase):
         portable = self.tmp / "tools" / "Daykeeper"
         portable.mkdir(parents=True)
         (portable / "Daykeeper.exe").write_bytes(b"")
-        self.assertEqual(update.install_kind("win32", installed / "Daykeeper.exe"), update.INSTALLED)
-        self.assertEqual(update.install_kind("win32", portable / "Daykeeper.exe"), update.PORTABLE)
+        self.assertEqual(update.install_kind("win32", installed / "Daykeeper.exe", registered=lambda: str(installed) + os.sep), update.INSTALLED)
+        self.assertEqual(update.install_kind("win32", portable / "Daykeeper.exe", registered=lambda: str(installed)), update.PORTABLE)
         mac_exe = Path("/Applications/Daykeeper.app/Contents/MacOS/Daykeeper")
         self.assertEqual(update.install_kind("darwin", mac_exe), update.MAC_APP)
         self.assertEqual(update.app_location("darwin", mac_exe), Path("/Applications/Daykeeper.app"))
@@ -205,10 +270,78 @@ class AssetPickTest(unittest.TestCase):
         self.assertEqual(update.why_not(frozen=False, preview=False, platform="win32", executable=exe), "source")
         self.assertEqual(update.why_not(frozen=True, preview=False, platform="linux", executable=exe), "platform")
         self.assertEqual(update.why_not(frozen=True, preview=False, platform="win32", executable=exe), "")
-        with mock.patch.object(update.os, "access", return_value=False):
-            self.assertEqual(update.why_not(frozen=True, preview=False, platform="win32", executable=exe), "readonly")
+        self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), ["Daykeeper"], "the probe folder is removed again")
         moved = Path("/private/var/folders/x/AppTranslocation/ABC/d/Daykeeper.app/Contents/MacOS/Daykeeper")
         self.assertEqual(update.why_not(frozen=True, preview=False, platform="darwin", executable=moved), "translocated")
+
+    def test_readonly_is_found_by_making_a_folder_not_by_the_mode_bits(self):
+        """os.access says yes on a folder an ACL or a read-only volume closes: the probe
+        is a real folder made and removed next to the app."""
+        exe = self.tmp / "Daykeeper" / "Daykeeper.exe"
+        exe.parent.mkdir()
+        made: list[str] = []
+
+        def refuse(*args, **kwargs):
+            made.append(str(kwargs.get("dir")))
+            raise PermissionError(13, "Access is denied")
+
+        with mock.patch.object(update.os, "access", return_value=True), mock.patch.object(update.tempfile, "mkdtemp", side_effect=refuse):
+            self.assertEqual(update.why_not(frozen=True, preview=False, platform="win32", executable=exe), "readonly")
+        self.assertEqual(made, [str(self.tmp)], "probed in the folder that holds the app folder")
+        with mock.patch.object(update.os, "access", return_value=False):
+            self.assertEqual(update.why_not(frozen=True, preview=False, platform="win32", executable=exe), "", "the mode bits are not asked")
+        self.assertTrue(update.writable(self.tmp))
+        self.assertFalse(update.writable(self.tmp / "missing"))
+        app = self.tmp / "Apps" / "Daykeeper.app"
+        (app / "Contents" / "MacOS").mkdir(parents=True)
+        with mock.patch.object(update.tempfile, "mkdtemp", side_effect=refuse):
+            self.assertEqual(update.why_not(frozen=True, preview=False, platform="darwin", executable=app / "Contents" / "MacOS" / "Daykeeper"), "readonly")
+        self.assertEqual(made[-1], str(self.tmp / "Apps"), "macOS: the folder that holds the bundle")
+        self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), ["Apps", "Daykeeper"])
+
+    def test_installed_needs_the_uninstall_entry_of_this_folder(self):
+        """unins*.exe beside the exe is not enough: the setup's HKCU uninstall entry must
+        name this folder (a portable folder with a stray uninstaller is portable)."""
+        folder = self.tmp / "Programs" / "Daykeeper"
+        folder.mkdir(parents=True)
+        (folder / "Daykeeper.exe").write_bytes(b"")
+        (folder / "unins000.exe").write_bytes(b"")
+        exe = folder / "Daykeeper.exe"
+        self.assertEqual(update.install_kind("win32", exe, registered=lambda: None), update.PORTABLE)
+        self.assertEqual(update.install_kind("win32", exe, registered=lambda: str(self.tmp / "Elsewhere")), update.PORTABLE)
+        self.assertEqual(update.install_kind("win32", exe, registered=lambda: str(folder)), update.INSTALLED)
+        with mock.patch.object(update, "registered_install_dir", return_value=str(folder) + os.sep):
+            self.assertEqual(update.install_kind("win32", exe), update.INSTALLED, "the default reads the registry function at call time")
+        (folder / "unins000.exe").unlink()
+        self.assertEqual(update.install_kind("win32", exe, registered=lambda: str(folder)), update.PORTABLE, "the uninstaller is still required")
+        self.assertTrue(update.UNINSTALL_KEY.endswith("\\" + update.APP_ID + "_is1"))
+        iss = (ROOT / "packaging" / "daykeeper.iss").read_text(encoding="utf-8-sig")
+        self.assertIn("AppId={" + update.APP_ID + "\n", iss.replace("\r\n", "\n"), "the AppId of the setup")
+
+    def test_the_registry_is_only_read(self):
+        """registered_install_dir opens the key for reading and gives InstallLocation; no
+        key — None. A fake winreg: the real registry is never touched here."""
+        calls: list[tuple] = []
+
+        class Key:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        fake = mock.MagicMock()
+        fake.HKEY_CURRENT_USER = "HKCU"
+        fake.OpenKey.side_effect = lambda root, path, *rest: (calls.append((root, path, *rest)), Key())[1]
+        fake.QueryValueEx.return_value = ("C:\\Users\\u\\AppData\\Local\\Programs\\Daykeeper\\", 1)
+        with mock.patch.dict(sys.modules, {"winreg": fake}):
+            self.assertEqual(update.registered_install_dir(), "C:\\Users\\u\\AppData\\Local\\Programs\\Daykeeper\\")
+            self.assertEqual(calls, [("HKCU", update.UNINSTALL_KEY)], "opened with the default access: read")
+            fake.QueryValueEx.assert_called_once_with(mock.ANY, "InstallLocation")
+            fake.OpenKey.side_effect = FileNotFoundError(2, "no key")
+            self.assertIsNone(update.registered_install_dir())
+        for name in ("SetValue", "SetValueEx", "CreateKey", "CreateKeyEx", "DeleteKey", "DeleteValue"):
+            self.assertFalse(getattr(fake, name).called, name)
 
 
 class PrepareTest(unittest.TestCase):
@@ -218,10 +351,13 @@ class PrepareTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="dk update "))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.key = SigningPair()
-        patcher = mock.patch.object(update, "PUBLIC_KEY", self.key.public)
+        patcher = mock.patch.object(update, "PUBLIC_KEYS", (self.key.public,))
         patcher.start()
         self.addCleanup(patcher.stop)
         self.installed = self.tmp / "Programs" / "Daykeeper"
+        patcher = mock.patch.object(update, "registered_install_dir", return_value=str(self.installed))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.installed.mkdir(parents=True)
         (self.installed / "Daykeeper.exe").write_bytes(b"old")
         (self.installed / "unins000.exe").write_bytes(b"")
@@ -254,7 +390,9 @@ class PrepareTest(unittest.TestCase):
         self.assertFalse(work.exists(), "the downloaded zip is deleted once unpacked")
         self.assertEqual((self.portable / "Daykeeper.exe").read_bytes(), b"old", "nothing replaced yet")
 
-    def test_mac_unpacks_the_bundle_zip(self):
+    def test_mac_hands_the_bundle_zip_to_its_unpacker(self):
+        """The zip goes to the unpacker (ditto on macOS; a fake here) and the new bundle is
+        looked for inside the staging folder."""
         release, http = signed_release(self.key, "2.1.0", self.assets)
         app = self.tmp / "Applications" / "Daykeeper.app"
         (app / "Contents" / "MacOS").mkdir(parents=True)
@@ -310,6 +448,56 @@ class PrepareTest(unittest.TestCase):
         release, http = signed_release(self.key, "2.1.0", {"Daykeeper-win64.zip": self.assets["Daykeeper-win64.zip"]})
         self.assert_refused(release, http, self.installed / "Daykeeper.exe", "not in the signed list")
 
+    def test_an_older_signed_list_replayed_under_a_newer_tag_is_refused(self):
+        """The release page offers v9.9.9, but its SHA256SUMS.txt and .sig are the real
+        signed ones of v2.1.0 (the zip names carry no version): refused before any
+        download, because the signed first line names v2.1.0."""
+        old, old_http = signed_release(self.key, "2.1.0", self.assets)
+        old_files = {u.rsplit("/", 1)[1]: b for u, b in old_http.files.items()}
+        replay, http = signed_release(self.key, "9.9.9", {"Daykeeper-win64.zip": old_files["Daykeeper-win64.zip"]})
+        for name in (update.SUMS_NAME, update.SIG_NAME):
+            http.files[f"{update.DOWNLOAD_PREFIX}v9.9.9/{name}"] = old_files[name]
+        self.assertIn(b"# daykeeper v2.1.0\n", old_files[update.SUMS_NAME])
+        self.assert_refused(replay, http, self.portable / "Daykeeper.exe", "is for v2.1.0, not for v9.9.9")
+        self.assertNotIn("Daykeeper-win64.zip", " ".join(http.asked), "nothing else is downloaded")
+
+    def test_a_signed_list_without_its_version_line_is_refused(self):
+        release, http = signed_release(self.key, "2.1.0", self.assets, sums_tag=None)
+        self.assert_refused(release, http, self.portable / "Daykeeper.exe", "does not name its version")
+        release, http = signed_release(self.key, "2.1.0", self.assets, sums_tag="2.1.0")
+        self.assert_refused(release, http, self.portable / "Daykeeper.exe", "is for 2.1.0, not for v2.1.0")
+
+    def test_a_staging_folder_that_is_not_ours_is_kept_aside(self):
+        """A `Daykeeper.update` the user made is renamed, never deleted; ours (it carries
+        the mark) is replaced."""
+        staging = update.staging_for(self.portable)
+        staging.mkdir()
+        (staging / "mine.txt").write_text("keep")
+        release, http = signed_release(self.key, "2.1.0", self.assets)
+        got = update.prepare(release, "win32", self.portable / "Daykeeper.exe", http, workdir=self.work())
+        self.assertTrue((got.staging / update.STAGING_MARK).is_file())
+        kept = [p for p in self.portable.parent.iterdir() if p.name.startswith("Daykeeper.update.")]
+        self.assertEqual(len(kept), 1)
+        self.assertEqual((kept[0] / "mine.txt").read_text(), "keep")
+        release, http = signed_release(self.key, "2.1.0", self.assets)
+        update.prepare(release, "win32", self.portable / "Daykeeper.exe", http, workdir=self.work())
+        self.assertEqual(len([p for p in self.portable.parent.iterdir() if p.name.startswith("Daykeeper.update.")]), 1, "our own staging is just replaced")
+
+    def test_an_archive_with_a_path_outside_its_folder_is_refused(self):
+        for evil in ("../evil.txt", "Daykeeper/../../evil.txt"):
+            dest = self.tmp / "unpack" / "Daykeeper.update"
+            archive = self.tmp / "evil.zip"
+            archive.write_bytes(zip_of({"Daykeeper/Daykeeper.exe": b"new", evil: b"x"}))
+            with self.assertRaises(update.UpdateError) as ctx:
+                update.unpack(archive, dest, "win32")
+            self.assertIn("outside its folder", str(ctx.exception))
+            self.assertFalse((self.tmp / "unpack" / "evil.txt").exists())
+            self.assertFalse((self.tmp / "evil.txt").exists())
+            self.assertEqual(list(dest.iterdir()), [], "nothing is extracted when one path is bad")
+        release, http = signed_release(self.key, "2.1.0", {**self.assets, "Daykeeper-win64.zip": zip_of({"Daykeeper/Daykeeper.exe": b"new", "../evil.txt": b"x"})})
+        self.assert_refused(release, http, self.portable / "Daykeeper.exe", "outside its folder")
+        self.assertFalse((self.portable.parent / "evil.txt").exists())
+
     def test_a_file_from_elsewhere_is_refused(self):
         release, http = signed_release(self.key, "2.1.0", self.assets)
         moved = update.Release(release.version, release.tag, assets=tuple(
@@ -359,10 +547,24 @@ class SwapScriptTest(unittest.TestCase):
         self.assertEqual(base64.b64decode(cmd[-1]).decode("utf-16-le"), script)
         self.assertIn("-EncodedCommand", cmd)
 
-    def test_the_setup_runs_silently_and_starts_the_app_again(self):
-        self.assertEqual(update.setup_command(Path(r"C:\T\Daykeeper-2.1.0-setup.exe"))[1:], ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/LAUNCH=1"])
-        prepared = update.Prepared(update.INSTALLED, "2.1.0", setup=Path(r"C:\T\s.exe"))
-        self.assertEqual(update.apply_command(prepared, "win32", r"C:\P\Daykeeper\Daykeeper.exe")[0], r"C:\T\s.exe")
+    def test_the_setup_waits_for_the_app_then_runs_silently_and_starts_it_again(self):
+        """The installed copy: a detached PowerShell waits for this process (when it is
+        still the app), then runs the setup with the silent switches, force-closing a copy
+        that still holds the files."""
+        switches = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/LAUNCH=1"]
+        self.assertEqual(update.setup_command(Path(r"C:\T\Daykeeper-2.1.0-setup.exe"))[1:], switches)
+        setup = Path(r"C:\Users\O'Neil\Temp [1]\daykeeper-update-x\Daykeeper-2.1.0-setup.exe")
+        prepared = update.Prepared(update.INSTALLED, "2.1.0", setup=setup)
+        cmd = update.apply_command(prepared, "win32", r"C:\P\Daykeeper\Daykeeper.exe", pid=4242, log=Path(r"C:\Temp\Daykeeper-update.log"))
+        self.assertTrue(cmd[0].lower().endswith("powershell.exe"), "not the setup itself: it would start while the app holds its files")
+        script = base64.b64decode(cmd[-1]).decode("utf-16-le")
+        self.assertIn("Get-Process -Id 4242", script)
+        self.assertIn(r"$exe = 'C:\P\Daykeeper\Daykeeper.exe'", script)
+        self.assertIn("WaitForExit(120000)", script)
+        self.assertIn(r"$setup = 'C:\Users\O''Neil\Temp [1]\daykeeper-update-x\Daykeeper-2.1.0-setup.exe'", script)
+        self.assertIn("$info.Arguments = '" + " ".join(switches) + "'", script)
+        self.assertLess(script.index("WaitForExit"), script.index("Process]::Start($info)"), "the setup starts after the wait")
+        self.assertNotIn(" -Path ", script)
 
     def test_mac_script_quotes_every_path(self):
         app = PurePosixPath("/Users/o'neil/My Apps/Daykeeper.app")
@@ -371,6 +573,19 @@ class SwapScriptTest(unittest.TestCase):
         self.assertIn("""OLD='/Users/o'"'"'neil/My Apps/Daykeeper.app.old'""", script)
         self.assertIn("kill -0 77", script)
         self.assertIn('/usr/bin/open "$APP"', script)
+        self.assertIn("ps -p 77 -o comm=", script, "the process is waited for only while it is still the app")
+        self.assertIn("""EXE='/Users/o'"'"'neil/My Apps/Daykeeper.app/Contents/MacOS/Daykeeper'""", script)
+        self.assertIn('if [ -f "$OLD/Contents/MacOS/Daykeeper" ]; then', script, "only a Daykeeper bundle is deleted")
+        self.assertIn(f'if [ -f "$STAGING/{update.STAGING_MARK}" ]; then rm -rf "$STAGING"; fi', script)
+
+    def test_the_scripts_delete_only_what_is_a_daykeeper_build(self):
+        app = Path(r"C:\Apps\Daykeeper")
+        script = update.windows_swap_script(1, app / "Daykeeper.exe", app, app.with_name("Daykeeper.update") / "Daykeeper", app.with_name("Daykeeper.update"), Path(r"C:\T\l.log"))
+        self.assertIn("if (Test-Path -LiteralPath (Join-Path $old $exeName) -PathType Leaf) { Remove-Item", script)
+        self.assertIn("$aside = Aside $old", script)
+        self.assertIn(f"$mark = '{update.STAGING_MARK}'", script)
+        self.assertIn("if (Test-Path -LiteralPath (Join-Path $staging $mark) -PathType Leaf) { Remove-Item -LiteralPath $staging", script)
+        self.assertEqual(script.count("Remove-Item"), 2, "the two guarded deletes and no other")
 
     def wait_for(self, path: Path, seconds: float = 60) -> bool:
         end = time.monotonic() + seconds
@@ -393,6 +608,7 @@ class SwapScriptTest(unittest.TestCase):
         new = staging / "Daykeeper"
         shutil.copytree(dummy, app)
         shutil.copytree(dummy, new)
+        (staging / update.STAGING_MARK).write_bytes(b"")
         (app / "which.txt").write_text("old")
         (new / "which.txt").write_text("new")
         evidence, marker = self.evidence_dir()
@@ -415,6 +631,68 @@ class SwapScriptTest(unittest.TestCase):
         self.assertIn("started", text)
         # the new copy, at its start, sweeps the old one (update.leftovers)
         self.assertIn(root / "Daykeeper.old", update.leftovers("win32", app / "Daykeeper.exe", tempdir=str(self.tmp)))
+
+    @unittest.skipUnless(sys.platform == "win32", "PowerShell")
+    def test_windows_swap_keeps_an_old_folder_that_is_not_daykeeper(self):
+        """A `Daykeeper.old` with the user's own files (no Daykeeper.exe in it) is renamed
+        aside, never deleted; the swap goes on."""
+        dummy = dummy_windows_exe(self.tmp / "dummy-src")
+        if dummy is None:
+            self.skipTest("no pythonw.exe to make a dummy exe from")
+        root = self.tmp / "Apps"
+        app = root / "Daykeeper"
+        staging = root / "Daykeeper.update"
+        new = staging / "Daykeeper"
+        shutil.copytree(dummy, app)
+        shutil.copytree(dummy, new)
+        (staging / update.STAGING_MARK).write_bytes(b"")
+        (new / "which.txt").write_text("new")
+        (root / "Daykeeper.old").mkdir()
+        (root / "Daykeeper.old" / "notes.txt").write_text("mine")
+        evidence, marker = self.evidence_dir()
+        log = self.tmp / "swap.log"
+        script = update.windows_swap_script(999_999_999, Path(sys.executable), app, new, staging, log)
+        env = {**os.environ, "PYTHONPATH": str(evidence), "PYTHONHOME": sys.base_prefix}
+        with mock.patch.dict(os.environ, env, clear=True):
+            runner = update.launch_detached(update.powershell_command(script), "win32")
+        self.addCleanup(runner.wait, 60)
+        self.assertTrue(self.wait_for(marker), log.read_text(encoding="utf-8-sig") if log.exists() else "no log")
+        self.assertEqual((app / "which.txt").read_text(), "new")
+        kept = [p for p in root.iterdir() if p.name.startswith("Daykeeper.old.")]
+        self.assertEqual(len(kept), 1, log.read_text(encoding="utf-8-sig"))
+        self.assertEqual((kept[0] / "notes.txt").read_text(), "mine")
+        self.assertTrue((root / "Daykeeper.old" / "Daykeeper.exe").is_file(), "the swapped-out copy took the name")
+        self.assertIn("kept a folder that is not Daykeeper", log.read_text(encoding="utf-8-sig"))
+
+    @unittest.skipUnless(sys.platform == "win32", "PowerShell")
+    def test_the_setup_waiter_runs_the_setup_once_the_app_has_quit(self):
+        """For real, with a dummy setup (the dummy exe: it records that it started, with
+        which arguments) and a stand-in for the app that quits after a moment."""
+        dummy = dummy_windows_exe(self.tmp / "dummy-src")
+        if dummy is None:
+            self.skipTest("no pythonw.exe to make a dummy exe from")
+        setup = dummy / "Daykeeper.exe"
+        evidence = self.tmp / "evidence"
+        evidence.mkdir()
+        marker = self.tmp / "started.txt"
+        quit_at = self.tmp / "quit.txt"
+        (evidence / "sitecustomize.py").write_text(
+            f"import sys, time\nopen({str(marker)!r}, 'w', encoding='utf-8').write(repr((time.time(), sys.orig_argv[1:])))\n", encoding="utf-8")
+        stand_in = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep(1.5); open({str(quit_at)!r}, 'w').write(repr(time.time()))"])  # noqa: S603
+        log = self.tmp / "setup.log"
+        cmd = update.apply_command(update.Prepared(update.INSTALLED, "2.1.0", setup=setup), "win32", sys.executable, pid=stand_in.pid, log=log)
+        env = {**os.environ, "PYTHONPATH": str(evidence), "PYTHONHOME": sys.base_prefix}
+        with mock.patch.dict(os.environ, env, clear=True):
+            runner = update.launch_detached(cmd, "win32")
+        self.addCleanup(runner.wait, 60)
+        stand_in.wait(10)
+        self.assertTrue(self.wait_for(marker), log.read_text(encoding="utf-8-sig") if log.exists() else "no log")
+        import ast
+
+        started, args = ast.literal_eval(marker.read_text(encoding="utf-8"))
+        self.assertGreaterEqual(started, float(quit_at.read_text()), "the setup started after the app quit")
+        self.assertEqual(args, list(update.SETUP_SWITCHES))
+        self.assertIn("started the setup", log.read_text(encoding="utf-8-sig"))
 
     @unittest.skipUnless(sys.platform == "win32", "PowerShell")
     def test_windows_swap_puts_the_old_copy_back_when_the_new_one_is_missing(self):
@@ -444,6 +722,7 @@ class SwapScriptTest(unittest.TestCase):
         for folder, which in ((app, "old"), (new, "new")):
             (folder / "Contents" / "MacOS").mkdir(parents=True)
             (folder / "which.txt").write_text(which)
+        (staging / update.STAGING_MARK).write_bytes(b"")
         evidence, marker = self.evidence_dir()
         opener = self.tmp / "open.py"
         opener.write_text(f"import sys; open({str(marker)!r}, 'w').write(sys.argv[1])")
@@ -456,6 +735,34 @@ class SwapScriptTest(unittest.TestCase):
         self.assertEqual(marker.read_text(), str(app))
         self.assertEqual((app / "which.txt").read_text(), "new")
         self.assertEqual((update.old_for(app) / "which.txt").read_text(), "old")
+        self.assertFalse(staging.exists())
+
+    @unittest.skipUnless(os.name == "posix", "sh")
+    def test_mac_swap_keeps_an_old_folder_that_is_not_daykeeper(self):
+        app = self.tmp / "Apps" / "Daykeeper.app"
+        staging = update.staging_for(app)
+        new = staging / "Daykeeper.app"
+        for folder, which in ((app, "old"), (new, "new")):
+            (folder / "Contents" / "MacOS").mkdir(parents=True)
+            (folder / "Contents" / "MacOS" / "Daykeeper").write_bytes(b"")
+            (folder / "which.txt").write_text(which)
+        (staging / update.STAGING_MARK).write_bytes(b"")
+        mine = update.old_for(app)
+        mine.mkdir()
+        (mine / "notes.txt").write_text("mine")
+        evidence, marker = self.evidence_dir()
+        opener = self.tmp / "open.py"
+        opener.write_text(f"import sys; open({str(marker)!r}, 'w').write(sys.argv[1])")
+        log = self.tmp / "swap.log"
+        script = update.mac_swap_script(999_999_999, app, new, staging, log, launch=(sys.executable, str(opener)))
+        runner = update.launch_detached(["/bin/sh", "-c", script], "darwin")
+        self.addCleanup(runner.wait, 60)
+        self.assertTrue(self.wait_for(marker), log.read_text() if log.exists() else "no log")
+        self.assertEqual((app / "which.txt").read_text(), "new")
+        self.assertEqual((mine / "which.txt").read_text(), "old", "the swapped-out bundle took the name")
+        kept = [p for p in app.parent.iterdir() if p.name.startswith("Daykeeper.app.old.")]
+        self.assertEqual(len(kept), 1, log.read_text())
+        self.assertEqual((kept[0] / "notes.txt").read_text(), "mine")
         self.assertFalse(staging.exists())
 
     def evidence_dir(self) -> tuple[Path, Path]:
@@ -491,6 +798,7 @@ class LeftoversTest(unittest.TestCase):
         old.mkdir()
         (old / "Daykeeper.exe").write_bytes(b"")
         (tmp / "apps" / "Daykeeper.update").mkdir()
+        (tmp / "apps" / "Daykeeper.update" / update.STAGING_MARK).write_bytes(b"")
         not_ours = tmp / "apps" / "Other.old"
         not_ours.mkdir()
         temp = tmp / "temp"
@@ -510,7 +818,10 @@ class LeftoversTest(unittest.TestCase):
         (tmp / "Daykeeper").mkdir()
         (tmp / "Daykeeper.old").mkdir()
         (tmp / "Daykeeper.old" / "notes.txt").write_text("mine")
+        (tmp / "Daykeeper.update").mkdir()
+        (tmp / "Daykeeper.update" / "notes.txt").write_text("mine too")
         self.assertEqual(update.leftovers("win32", tmp / "Daykeeper" / "Daykeeper.exe", tempdir=str(tmp / "none")), [])
+        self.assertEqual(update.leftovers("darwin", tmp / "Daykeeper.app" / "Contents" / "MacOS" / "Daykeeper", tempdir=str(tmp / "none")), [])
 
 
 class SignReleaseTest(unittest.TestCase):
@@ -521,7 +832,7 @@ class SignReleaseTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.sums = self.tmp / "SHA256SUMS.txt"
-        self.sums.write_bytes(b"0" * 64 + b"  Daykeeper-win64.zip\n")
+        self.sums.write_bytes(b"# daykeeper v2.1.0\n" + b"0" * 64 + b"  Daykeeper-win64.zip\n")
         self.key = SigningPair()
 
     def run_main(self, env, public=None):
@@ -545,6 +856,16 @@ class SignReleaseTest(unittest.TestCase):
             code, said = self.run_main(env, self.key.public)
             self.assertEqual(code, 2, said)
             self.assertFalse((self.tmp / "SHA256SUMS.txt.sig").exists())
+
+    def test_a_list_without_its_version_line_is_not_signed(self):
+        """The app refuses such a list; the release fails here instead."""
+        self.sums.write_bytes(b"0" * 64 + b"  Daykeeper-win64.zip\n")
+        secret = self.key.private_b64()
+        code, said = self.run_main({sign_release.ENV: secret}, self.key.public)
+        self.assertEqual(code, 2, said)
+        self.assertIn("# daykeeper <tag>", said)
+        self.assertFalse((self.tmp / "SHA256SUMS.txt.sig").exists())
+        self.assertNotIn(secret, said)
 
     def test_a_key_that_is_not_the_app_key_fails_and_leaves_no_signature(self):
         secret = SigningPair().private_b64()

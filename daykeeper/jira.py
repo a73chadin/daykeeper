@@ -173,10 +173,11 @@ class JiraClient:
         import urllib.error
         import urllib.request
 
+        from . import tls
         from .gitlab import _same_host_redirects
 
         req = urllib.request.Request(url, data=data, headers={**headers, "User-Agent": "Daykeeper"}, method=method)  # noqa: S310 — https only, checked by _guard
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl.create_default_context()), _same_host_redirects())
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=tls.context()), _same_host_redirects())
         try:
             with opener.open(req, timeout=self.timeout) as resp:
                 return resp.status, resp.read()

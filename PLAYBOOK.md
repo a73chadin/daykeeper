@@ -355,14 +355,22 @@ new pulled in a part of Qt; see `packaging/qt_filter.py`.
   uploaded, or it is an older one without an installer: try later, or update by hand.
 - *"Daykeeper cannot write next to its folder"* — a portable folder under `Program
   Files` or another folder you cannot write to: move the `Daykeeper` folder somewhere of
-  your own, or use the installer. On macOS: *"runs this copy from a protected place"* —
-  move `Daykeeper.app` to Applications first.
+  your own, or use the installer. On macOS: *"cannot write to the folder that holds
+  Daykeeper.app"* — move `Daykeeper.app` to a folder of your own, such as Applications;
+  *"runs this copy from a protected place"* — move `Daykeeper.app` to Applications first.
 - *The app closed for the update and did not come back.* Installed: start it from the
-  Start menu; the setup's log is in `%TEMP%\Setup Log *.txt`. Portable folder or macOS:
+  Start menu; the setup's log is in `%TEMP%\Setup Log *.txt`, and the waiter that starts
+  the setup once the app has quit writes `Daykeeper-update.log` in `%TEMP%`. If an update
+  leaves the app broken, run the setup again; the vault is not touched. Portable folder or macOS:
   the swap script writes `Daykeeper-update.log` in the temporary folder (`%TEMP%`;
   `$TMPDIR` on macOS). The old copy is never deleted before the new one has started: if
   `Daykeeper.old` (or `Daykeeper.app.old`) is still there next to the app, the new one
-  did not start — delete the new `Daykeeper` folder and rename `Daykeeper.old` back.
+  did not start — delete the new `Daykeeper` folder and rename `Daykeeper.old` back. A
+  `Daykeeper.old` that was not a Daykeeper build (a folder of your own by that name) is
+  never deleted: the update renames it to `Daykeeper.old.<date>-<n>`.
+- *"The signed list of checksums is for …, not for …"* or *"… does not name its version"*
+  — the release page offers an older release's signed files under a newer version.
+  Nothing was changed; report it (SECURITY.md).
   Your data is not in these folders; the vault was also copied to `backup` right before
   the update.
 - *"There is a new version" every day after an update by hand* — the copy you start is
@@ -373,7 +381,8 @@ page: the file, `SHA256SUMS.txt` and `SHA256SUMS.txt.sig`):
 
 1. The checksum: `certutil -hashfile Daykeeper-2.1.0-setup.exe SHA256` (Windows) or
    `shasum -a 256 Daykeeper-2.1.0.dmg` (macOS) must print the line `SHA256SUMS.txt`
-   gives for that file.
+   gives for that file. The list's first line, `# daykeeper v2.1.0`, must name the
+   release you downloaded.
 2. The list is the signed one (Python with `cryptography`, e.g. the source tree's venv):
 
    ```
@@ -381,7 +390,8 @@ page: the file, `SHA256SUMS.txt` and `SHA256SUMS.txt.sig`):
    ```
 
    An `InvalidSignature` error means the list is not the one the release build signed.
-   The key is the one in `daykeeper/update.py`.
+   The key is the first one in `PUBLIC_KEYS` of `daykeeper/update.py`; a release signed
+   with a spare key listed there verifies with that one instead.
 3. Which build made it: `gh attestation verify Daykeeper-2.1.0-setup.exe --owner a73chadin`
    (GitHub CLI) checks the signed provenance statement of the release: the repository,
    the workflow run and the commit that built the file.

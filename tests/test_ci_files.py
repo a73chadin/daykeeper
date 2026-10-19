@@ -176,7 +176,28 @@ class InstallerAndSigningTest(unittest.TestCase):
         release = workflow[workflow.index("  release:"):]
         for name in ("Daykeeper-*-setup.exe", "Daykeeper-*.dmg", "SHA256SUMS.txt.sig"):
             self.assertIn(f"out/{name}", release, name)
-        self.assertIn("sha256sum Daykeeper-win64.zip Daykeeper-*-setup.exe Daykeeper-macos.zip Daykeeper-*.dmg > SHA256SUMS.txt", release)
+        self.assertIn(r"""{ printf '# daykeeper %s\n' "$REF_NAME"; sha256sum Daykeeper-win64.zip Daykeeper-*-setup.exe Daykeeper-macos.zip Daykeeper-*.dmg; } > SHA256SUMS.txt""", release)
+        self.assertIn("REF_NAME: ${{ github.ref_name }}", release, "the version line names the tag being released")
+        self.assertRegex(windows, r"choco install innosetup --version \$env:INNOSETUP_VERSION", "choco's Inno Setup is pinned")
+        self.assertRegex(windows, r'INNOSETUP_VERSION: "\d+\.\d+\.\d+"')
+
+    def test_no_run_block_pastes_an_expression_into_the_script(self):
+        """A `${{ }}` inside `run:` is pasted into the script before it runs: a tag name or
+        an input could carry shell code. Values reach scripts through `env:`."""
+        for wf in ("build.yml", "test.yml", "screenshots.yml"):
+            indent: int | None = None
+            for n, line in enumerate(_read(f".github/workflows/{wf}").splitlines(), 1):
+                body = line.lstrip()
+                depth = len(line) - len(body)
+                if indent is not None and body and depth <= indent:
+                    indent = None  # the run block ended
+                if indent is not None:
+                    self.assertNotIn("${{", line, f"{wf}:{n}")
+                m = re.match(r"(?:- )?run: ?(.*)$", body)
+                if m:
+                    self.assertNotIn("${{", m.group(1), f"{wf}:{n}")
+                    if m.group(1).startswith(("|", ">")):
+                        indent = depth
 
     def test_the_signing_key_reaches_only_the_signing_step(self):
         workflow = _read(".github/workflows/build.yml")

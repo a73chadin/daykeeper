@@ -9,9 +9,11 @@
 ; -> dist\Daykeeper-<version>-setup.exe. Paths below are relative to this file.
 ;
 ; The app's update (daykeeper/update.py) runs this setup with
-;   /SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /LAUNCH=1
-; after the user confirmed it: it installs over the running copy (closing it if it still
-; runs) and LAUNCH=1 starts the new one at the end.
+;   /SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /LAUNCH=1
+; after the user confirmed it and once the app has quit (a detached waiter starts it): it
+; installs over the copy (closing one that still runs, by force if it must) and LAUNCH=1
+; starts the new one at the end. The app also looks for the uninstall entry of this AppId
+; under HKCU to tell an installed copy from a portable folder: keep the AppId.
 
 #ifndef AppVersion
   #error Pass the version: iscc /DAppVersion=2.1.0 ...

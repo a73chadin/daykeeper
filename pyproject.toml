@@ -97,6 +97,7 @@ files = [
     "daykeeper/mr_preview.py",
     "daykeeper/calls.py",
     "daykeeper/update.py",
+    "daykeeper/tls.py",
 ]
 ignore_missing_imports = true
 warn_unused_ignores = true

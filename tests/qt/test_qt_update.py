@@ -5,6 +5,8 @@ and the backup copy made before anything is started. Nothing is downloaded for r
 nothing is installed, nothing is started, and the app never quits."""
 from __future__ import annotations
 
+import base64
+import re
 import shutil
 import tempfile
 import unittest
@@ -43,7 +45,7 @@ class UpdateUiTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.temp = temp
         self.key = SigningPair()
-        patcher = mock.patch.object(update, "PUBLIC_KEY", self.key.public)
+        patcher = mock.patch.object(update, "PUBLIC_KEYS", (self.key.public,))
         patcher.start()
         self.addCleanup(patcher.stop)
         for t in list(Toast.stack):
@@ -54,6 +56,9 @@ class UpdateUiTest(unittest.TestCase):
         self.app_dir.mkdir(parents=True)
         (self.app_dir / "Daykeeper.exe").write_bytes(b"old")
         (self.app_dir / "unins000.exe").write_bytes(b"")
+        patcher = mock.patch.object(update, "registered_install_dir", return_value=str(self.app_dir))  # the setup's uninstall entry, faked
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.setup_name = update.setup_name("9.1.0")
         self.release, self.http = signed_release(self.key, "9.1.0", {self.setup_name: b"MZ new setup", "Daykeeper-win64.zip": b"PK"}, body=NOTES)
         self.watch = self.win.updates
@@ -176,9 +181,12 @@ class UpdateUiTest(unittest.TestCase):
         self.assertTrue(wait_until(lambda: bool(self.launched), 5000), dlg.status.text())
         cmd, backups_at_launch = self.launched[0]
         self.assertGreater(backups_at_launch, before, "the vault was copied before the update started")
-        self.assertTrue(cmd[0].endswith(self.setup_name))
-        self.assertEqual(cmd[1:], ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/LAUNCH=1"])
-        self.assertEqual(Path(cmd[0]).read_bytes(), b"MZ new setup")
+        self.assertTrue(cmd[0].lower().endswith("powershell.exe"), "a waiter starts the setup once the app has quit")
+        script = base64.b64decode(cmd[-1]).decode("utf-16-le")
+        setup = re.search(r"(?m)^\$setup = '(.*)'$", script).group(1).replace("''", "'")
+        self.assertTrue(setup.endswith(self.setup_name))
+        self.assertEqual(Path(setup).read_bytes(), b"MZ new setup")
+        self.assertIn("$info.Arguments = '/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /LAUNCH=1'", script)
         self.assertEqual(self.quits, [1])
 
     def test_cancel_stops_the_download_and_deletes_it(self):
@@ -240,7 +248,7 @@ class UpdateUiTest(unittest.TestCase):
             self.assertIn("preview copy", told.call_args[0][1])
         self.assertEqual(self.launched, [])
 
-    def test_a_portable_folder_is_swapped_by_a_script(self):
+    def test_a_portable_folder_gets_a_swap_script_and_stays_as_it_is_until_the_app_quits(self):
         portable = self.tmp / "my tools" / "Daykeeper"
         portable.mkdir(parents=True)
         (portable / "Daykeeper.exe").write_bytes(b"old")
@@ -258,6 +266,65 @@ class UpdateUiTest(unittest.TestCase):
         self.assertEqual(((portable.parent / "Daykeeper.update" / "Daykeeper" / "Daykeeper.exe")).read_bytes(), b"new")
         self.assertEqual((portable / "Daykeeper.exe").read_bytes(), b"old", "the swap waits for the app to quit")
         self.assertEqual(list(self.temp.iterdir()), [], "the zip is gone")
+
+    def test_a_failed_check_is_not_stamped_and_is_tried_again(self):
+        """Only a check that got an answer counts for the daily gate: after an error the
+        hourly ticker asks again."""
+        self.watch.now = lambda: 2_000_000_000.0
+        self.http.fail_with = update.UpdateError("HTTP 503")
+        self.watch.maybe_check()
+        self.settle()
+        self.assertEqual(self.watch.state, "error")
+        self.assertNotIn(update.SETTING_CHECKED, read_settings(self.win.session.settings_path))
+        self.http.fail_with = None
+        self.watch.maybe_check()  # the next tick
+        self.settle()
+        self.assertEqual(len(self.http.asked), 2, "tried again")
+        self.assertEqual(read_settings(self.win.session.settings_path)[update.SETTING_CHECKED], 2_000_000_000.0)
+        self.watch.maybe_check()
+        self.settle()
+        self.assertEqual(len(self.http.asked), 2, "a good check closes the gate for a day")
+
+    def test_a_failure_that_is_not_a_refusal_is_told_plainly(self):
+        dlg = self.open_dialog()
+        with mock.patch.object(update, "prepare", side_effect=PermissionError(13, "Access is denied")):
+            dlg.go.click()
+            self.assertTrue(wait_until(lambda: "Could not install" in dlg.status.text(), 5000), dlg.status.text())
+        self.assertEqual(dlg.status.text(), "Could not install the update: Access is denied. Nothing was changed, and the download was deleted.")
+        self.assertNotIn("refused", dlg.status.text())
+        self.assertTrue(dlg.go.isEnabled())
+        self.assertEqual(self.launched, [])
+
+    def test_a_vault_locked_during_the_download_starts_nothing(self):
+        """The download finished after the lock: the prepared update is deleted, the vault
+        is not saved or copied, and nothing starts."""
+        dlg = self.open_dialog()
+        staging = self.tmp / "my tools" / "Daykeeper.update"
+        (staging / "Daykeeper").mkdir(parents=True)
+        work = self.temp / (update.TEMP_PREFIX + "x")
+        work.mkdir()
+        prepared = update.Prepared(update.PORTABLE, "9.1.0", staging=staging, new_copy=staging / "Daykeeper", workdir=work)
+        before = self.backups()
+        with mock.patch.object(type(self.win), "vault", new_callable=mock.PropertyMock, return_value=None), mock.patch.object(self.win, "save_now") as save:
+            dlg._prepared(prepared, None)
+        save.assert_not_called()
+        self.assertFalse(staging.exists())
+        self.assertFalse(work.exists())
+        self.assertEqual(self.launched, [])
+        self.assertEqual(self.quits, [])
+        self.assertEqual(self.backups(), before)
+        self.assertIn("locked", dlg.status.text())
+
+    def test_the_readonly_reason_names_the_right_folder(self):
+        exe = Path(r"C:\Program Files\Daykeeper\Daykeeper.exe")
+        text = update_ui.reason_text("readonly", exe, "win32")
+        self.assertIn(str(exe.parent), text)
+        self.assertIn("installer", text)
+        mac_exe = Path("/Volumes/Shared/Apps/Daykeeper.app/Contents/MacOS/Daykeeper")
+        text = update_ui.reason_text("readonly", mac_exe, "darwin")
+        self.assertIn(f"({Path('/Volumes/Shared/Apps')})", text, "the folder that holds the bundle")
+        self.assertNotIn("Contents", text)
+        self.assertNotIn("installer", text, "macOS has no installer")
 
 
 if __name__ == "__main__":

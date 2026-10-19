@@ -200,6 +200,11 @@ pywin32-ctypes==0.2.3 ; sys_platform == "win32" \
 macholib==1.16.4 ; sys_platform == "darwin" \
     --hash=sha256:da1a3fa8266e30f0ce7e97c6a54eefaae8edd1e5f86f3eb8b95457cae90265ea \
     --hash=sha256:f408c93ab2e995cd2c46e34fe328b130404be143469e41bc366c807448979362
+# the CA list a frozen macOS build trusts for HTTPS (daykeeper/tls.py: the bundle has
+# no system store Python can read)
+certifi==2026.10.18 \
+    --hash=sha256:73191c47aaa79da394e8fee2dbc2ec827432cab56311122c9e47abf79e390f62 \
+    --hash=sha256:b9995d97b64d0431a5af837d8ca8cd6238104d1f319f04bd93ea43124d6c861e
 # the Qt window (daykeeper/qt, main.py): QtCore/QtGui/QtWidgets only, not the full
 # PySide6 (Addons, WebEngine). The two versions must always be the same.
 PySide6-Essentials==6.12.0 \

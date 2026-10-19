@@ -56,10 +56,13 @@ jobs:
         # it starts three times faster than one file), then the app that carries it, as a
         # folder (the LGPL needs Qt's libraries as files of their own); the folder must stay
         # under 95 MB (about 71 for the app, 19 for the helper). The zip holds the Daykeeper folder itself.
+        # Values of the run reach the script as variables, never pasted into it.
+        env:
+          BUILD_SHA: ${{ github.sha }}
         run: |
           python -m PyInstaller --noconfirm --clean --onedir --console --noupx --name daykeeper-cli --icon assets/icon.ico --exclude-module tkinter --exclude-module cryptography --exclude-module argon2 --exclude-module PySide6 --exclude-module shiboken6 cli_main.py
           if ($LASTEXITCODE) { exit 1 }
-          Set-Content -NoNewline -Encoding ascii dist/daykeeper-cli/build-id.txt "${{ github.sha }}"
+          Set-Content -NoNewline -Encoding ascii dist/daykeeper-cli/build-id.txt $env:BUILD_SHA
           python -m PyInstaller --noconfirm --clean --distpath dist --workpath build/Daykeeper packaging/daykeeper.spec
           if ($LASTEXITCODE) { exit 1 }
           python packaging/check_size.py dist/Daykeeper 95
@@ -71,16 +74,22 @@ jobs:
         # Daykeeper-<version>-setup.exe from the same folder (packaging/daykeeper.iss: per
         # user, no administrator rights). Inno Setup comes with the runner image; choco
         # installs it only when it is not there. A tag must name the version the package
-        # carries: the app's update looks for the setup by the tag's version.
+        # carries: the app's update looks for the setup by the tag's version. The tag name
+        # reaches the script as a variable, never pasted into it (a tag name is chosen by
+        # whoever pushes it). Inno Setup from choco is pinned to one version.
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INNOSETUP_VERSION: "6.4.3"
         run: |
           $version = python -c "import daykeeper; print(daykeeper.__version__)"
           if ($LASTEXITCODE) { exit 1 }
-          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$version") { Write-Error "the tag ${{ github.ref_name }} does not match the version $version in daykeeper/__init__.py"; exit 1 }
+          if ($env:REF_TYPE -eq "tag" -and $env:REF_NAME -ne "v$version") { Write-Error "the tag $env:REF_NAME does not match the version $version in daykeeper/__init__.py"; exit 1 }
           $numeric = $version.Split('-')[0]
           $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
           if (-not $iscc) { $iscc = (Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }
           if (-not $iscc) {
-            choco install innosetup -y --no-progress
+            choco install innosetup --version $env:INNOSETUP_VERSION -y --no-progress
             if ($LASTEXITCODE) { exit 1 }
             $iscc = (Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
           }
@@ -162,12 +171,18 @@ jobs:
           python-version: "3.13"
 
       - name: Checksums
+        # the first line names the release ("# daykeeper v2.1.0") and is signed with the
+        # rest: the app refuses a list whose line is not the tag it is offered under, so an
+        # older signed release (its zips carry no version in their names) cannot be
+        # replayed as a newer one
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           mkdir out
           cp artifacts/Daykeeper-windows/Daykeeper-win64.zip artifacts/Daykeeper-windows/Daykeeper-*-setup.exe out/
           cp artifacts/Daykeeper-macos/Daykeeper-macos.zip artifacts/Daykeeper-macos/Daykeeper-*.dmg out/
           cd out
-          sha256sum Daykeeper-win64.zip Daykeeper-*-setup.exe Daykeeper-macos.zip Daykeeper-*.dmg > SHA256SUMS.txt
+          { printf '# daykeeper %s\n' "$REF_NAME"; sha256sum Daykeeper-win64.zip Daykeeper-*-setup.exe Daykeeper-macos.zip Daykeeper-*.dmg; } > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Install the signing tool

@@ -119,10 +119,11 @@ update is taken by hand.
 
 *How a download is trusted.* Every release's `SHA256SUMS.txt` is signed in CI with an
 Ed25519 key (`tools/sign_release.py`); the private half exists only as a secret of the
-repository, the public half is in `daykeeper/update.py` (`PUBLIC_KEY`), and CI checks the
-new signature against it before publishing. A file that was swapped on the release page
-or on the way does not match the signed list, and a list that was swapped does not match
-the signature. The same checks by hand: PLAYBOOK, section 9.
+repository, the public half is in `daykeeper/update.py` (`PUBLIC_KEYS`, which can also
+hold a spare key kept offline), and CI checks the new signature against it before
+publishing. A file that was swapped on the release page or on the way does not match the
+signed list, a list that was swapped does not match the signature, and the list's signed
+first line names its release, so an older release cannot be offered as a newer one. The same checks by hand: PLAYBOOK, section 9.
 
 **Coming from 1.x.** 2.0 opens the vault, `settings.json` and the journal inbox of 1.x
 as they are. After that, do not open the vault with a 1.x build again: 1.x does not know

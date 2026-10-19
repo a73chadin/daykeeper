@@ -36,6 +36,15 @@ license texts ship in the build under `cryptography-<version>.dist-info/licenses
 uses [cffi](https://cffi.readthedocs.io/) (MIT,
 [licenses/cffi-LICENSE.txt](licenses/cffi-LICENSE.txt)).
 
+## certifi
+
+The builds carry, and the macOS build uses, the CA list of
+[certifi](https://github.com/certifi/python-certifi) (Mozilla's root
+certificates) to check HTTPS certificates (the update check, GitLab, Jira), under the [Mozilla Public License 2.0](licenses/MPL-2.0.txt); its notice is
+in [licenses/certifi-LICENSE.txt](licenses/certifi-LICENSE.txt). It ships unmodified, in
+the build as `certifi/cacert.pem`; its source is on [PyPI](https://pypi.org/project/certifi/)
+(the exact version is in `requirements-build.txt`).
+
 ## PyInstaller
 
 The builds are made with [PyInstaller](https://pyinstaller.org/); its bootloader, part of

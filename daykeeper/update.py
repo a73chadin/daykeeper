@@ -5,12 +5,15 @@ asked for pre-releases too) with a plain User-Agent, at most once a day, off in 
 settings with one switch. Nothing else leaves the computer.
 
 The update itself happens only after the user asked for it. The release's SHA256SUMS.txt
-is signed in CI with an Ed25519 key whose public half is PUBLIC_KEY below; the list is
-read only when its signature holds, and the downloaded file is used only when its SHA-256
-is the one the list gives. Anything else is refused and the download deleted.
+is signed in CI with an Ed25519 key whose public half is in PUBLIC_KEYS below; the list is
+read only when its signature holds, its first line names the release's own tag (an older
+signed list replayed under a newer tag is refused), and the downloaded file is used only
+when its SHA-256 is the one the list gives. Anything else is refused and the download
+deleted.
 
-Then: on Windows, an installed copy (the uninstaller lies beside the exe) runs the new
-setup silently, which closes this app, installs over it and starts it again; a portable
+Then: on Windows, an installed copy (the setup's uninstall entry points at this folder)
+runs the new setup silently once this process has quit, which installs over it and starts
+it again; a portable
 folder is unpacked next to itself and swapped by a small script once this process has
 quit, the old folder kept as `<name>.old` until the new one has started; on macOS the
 same swap for the .app bundle. No Qt here: the window drives it (qt/dialogs/update.py)."""
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import hashlib
 import json
 import os
@@ -32,19 +36,26 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from pathlib import Path, PurePath
+from pathlib import Path, PurePath, PureWindowsPath
 
-from . import __version__
+from . import __version__, tls
 from .i18n import _
 
 REPO = "a73chadin/daykeeper"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 LIST_URL = f"https://api.github.com/repos/{REPO}/releases?per_page=20"
 DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"
-# the public half of the key that signs SHA256SUMS.txt of every release (base64 of the
-# raw 32 bytes); the private half lives only in the repository's secrets
-PUBLIC_KEY = "PfX6chME57winjkX63RGCzrV8Ey+owju5vhriuDzrdM="
+# the public halves of the keys whose signature on SHA256SUMS.txt is accepted (base64 of
+# the raw 32 bytes); a signature by any one of them holds. The first signs every release:
+# its private half lives only in the repository's secrets. A spare key, whose private half
+# is kept offline and never on GitHub, joins it here: a release signed with the spare
+# reaches the copies already installed when the first key is lost or has to be replaced.
+PUBLIC_KEYS: tuple[str, ...] = (
+    "PfX6chME57winjkX63RGCzrV8Ey+owju5vhriuDzrdM=",
+)
 SUMS_NAME = "SHA256SUMS.txt"
+# the first line of SHA256SUMS.txt, put there by CI before signing: "# daykeeper <tag>"
+SUMS_HEADER = "# daykeeper "
 SIG_NAME = SUMS_NAME + ".sig"
 WINDOWS_ZIP = "Daykeeper-win64.zip"
 MAC_ZIP = "Daykeeper-macos.zip"
@@ -65,6 +76,14 @@ SETTING_TOLD = "update_told"  # the version the quiet note was shown for
 TEMP_PREFIX = "daykeeper-update-"
 OLD_SUFFIX = ".old"
 STAGING_SUFFIX = ".update"
+# a file prepare puts into the staging folder it makes: only such a folder is ever deleted
+STAGING_MARK = ".daykeeper-update"
+PROBE_PREFIX = ".daykeeper-probe-"
+
+# the setup's AppId (packaging/daykeeper.iss); Inno Setup writes its uninstall entry, with
+# the install folder, under HKCU\<UNINSTALL_KEY> for a per-user install
+APP_ID = "{BEE0D65A-A989-4ED5-B3C9-34F1DC2BDC81}"
+UNINSTALL_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + APP_ID + "_is1"
 
 
 class UpdateError(Exception):
@@ -217,7 +236,6 @@ class Http:
         self.timeout = timeout
 
     def _open(self, url: str, accept: str):
-        import ssl
         import urllib.request
 
         _https_only(url)
@@ -227,7 +245,7 @@ class Http:
                 _https_only(newurl)  # a download is redirected to GitHub's file host: HTTPS there too
                 return super().redirect_request(req, fp, code, msg, headers, newurl)
 
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl.create_default_context()), HttpsRedirect())
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=tls.context()), HttpsRedirect())
         req = urllib.request.Request(url, headers={"User-Agent": user_agent(), "Accept": accept})  # noqa: S310 — https only, checked above
         try:
             return opener.open(req, timeout=self.timeout)
@@ -282,13 +300,35 @@ def check(http: Http | None = None, current: str = __version__, prereleases: boo
 INSTALLED, PORTABLE, MAC_APP = "installed", "portable", "app"
 
 
-def install_kind(platform: str = sys.platform, executable: str | Path = sys.executable) -> str:
+def registered_install_dir() -> str | None:
+    """The folder the setup's uninstall entry under HKCU names (InstallLocation); None —
+    no entry (never installed by this user, or not Windows). Only read."""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as key:
+            value = winreg.QueryValueEx(key, "InstallLocation")[0]
+    except (ImportError, OSError):
+        return None
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _same_folder(a: str | Path, b: str | Path) -> bool:
+    return os.path.normcase(os.path.normpath(str(a))) == os.path.normcase(os.path.normpath(str(b)))
+
+
+def install_kind(platform: str = sys.platform, executable: str | Path = sys.executable, registered: Callable[[], str | None] | None = None) -> str:
     """How this built copy was put on the computer: "installed" (Windows, by the setup:
-    its uninstaller lies beside the exe), "portable" (Windows, an unpacked folder), "app"
-    (a macOS bundle); "" — something an update cannot replace (Linux, a lone binary)."""
+    its uninstaller lies beside the exe and its uninstall entry names this folder),
+    "portable" (Windows, an unpacked folder), "app" (a macOS bundle); "" — something an
+    update cannot replace (Linux, a lone binary)."""
     exe = Path(executable)
     if platform == "win32":
-        return INSTALLED if any(exe.parent.glob("unins*.exe")) else PORTABLE
+        if any(exe.parent.glob("unins*.exe")):
+            location = (registered or registered_install_dir)()
+            if location and _same_folder(location, exe.parent):
+                return INSTALLED
+        return PORTABLE
     if platform == "darwin":
         return MAC_APP if app_location(platform, exe) is not None else ""
     return ""
@@ -330,19 +370,29 @@ def why_not(frozen: bool, preview: bool, platform: str = sys.platform, executabl
         app = app_location(platform, executable)
         if app is None or "/AppTranslocation/" in app.as_posix():
             return "translocated"  # macOS runs a quarantined download from a hidden read-only copy
-    if kind != INSTALLED:
-        parent = (app_location(platform, executable) or Path(executable).parent).parent
-        if not os.access(parent, os.W_OK):
-            return "readonly"
+    if kind != INSTALLED and not writable((app_location(platform, executable) or Path(executable).parent).parent):
+        return "readonly"
     return ""
+
+
+def writable(folder: Path) -> bool:
+    """A folder can be made in `folder` and removed again: what the swap needs next to the
+    app (os.access answers by the mode bits and misses ACLs and read-only volumes)."""
+    try:
+        probe = tempfile.mkdtemp(prefix=PROBE_PREFIX, dir=folder)
+    except OSError:
+        return False
+    with contextlib.suppress(OSError):
+        os.rmdir(probe)
+    return True
 
 
 # ---- checking what was downloaded
 
 
-def verify_signature(data: bytes, sig_text: bytes | str, public_key: str | None = None) -> None:
-    """The signature (base64 of 64 bytes) over `data` holds for the key (the release key
-    when none is given); else UpdateError."""
+def verify_signature(data: bytes, sig_text: bytes | str, public_keys: str | Sequence[str] | None = None) -> None:
+    """The signature (base64 of 64 bytes) over `data` holds for one of the keys (the
+    release keys, PUBLIC_KEYS, when none are given); else UpdateError."""
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -353,10 +403,23 @@ def verify_signature(data: bytes, sig_text: bytes | str, public_key: str | None 
         raise UpdateError(_("The signature of the checksums is not readable")) from exc
     if len(sig) != 64:
         raise UpdateError(_("The signature of the checksums is not readable"))
-    try:
-        Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key or PUBLIC_KEY)).verify(sig, data)
-    except InvalidSignature as exc:
-        raise UpdateError(_("The signature of the checksums does not match: the list was not made by the release build")) from exc
+    keys = (public_keys,) if isinstance(public_keys, str) else tuple(public_keys or PUBLIC_KEYS)
+    for key in keys:
+        try:
+            Ed25519PublicKey.from_public_bytes(base64.b64decode(key)).verify(sig, data)
+            return
+        except InvalidSignature:
+            continue
+    raise UpdateError(_("The signature of the checksums does not match: the list was not made by the release build"))
+
+
+def sums_tag(text: str) -> str | None:
+    """The tag the signed list was made for: its first line, "# daykeeper <tag>"; None — the
+    line is missing (a list of an older build, or not one of ours)."""
+    first = text.split("\n", 1)[0].strip()
+    if not first.startswith(SUMS_HEADER):
+        return None
+    return first[len(SUMS_HEADER):].strip() or None
 
 
 def parse_sums(text: str) -> dict[str, str]:
@@ -460,6 +523,30 @@ def unpack(archive: Path, dest: Path, platform: str = sys.platform) -> None:
         zf.extractall(dest)
 
 
+def app_marker(platform: str) -> str:
+    """The file inside a folder that makes it a Daykeeper build."""
+    return "Contents/MacOS/Daykeeper" if platform == "darwin" else "Daykeeper.exe"
+
+
+def is_build(folder: Path, platform: str) -> bool:
+    return (folder / app_marker(platform)).is_file()
+
+
+def is_our_staging(folder: Path) -> bool:
+    return (folder / STAGING_MARK).is_file()
+
+
+def aside_name(path: Path, now: float | None = None) -> Path:
+    """A free name next to `path` for a folder that is in the way but is not ours."""
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time() if now is None else now))
+    n = 1
+    while True:
+        target = path.with_name(f"{path.name}.{stamp}-{n}")
+        if not target.exists() and not target.is_symlink():
+            return target
+        n += 1
+
+
 def staging_for[P: PurePath](app: P) -> P:
     return app.with_name(app.name + STAGING_SUFFIX)
 
@@ -485,7 +572,13 @@ def prepare(release: Release, platform: str, executable: str | Path, http: Http 
         sums_bytes = http.get(_release_url(release, SUMS_NAME))
         sig = http.get(_release_url(release, SIG_NAME))
         verify_signature(sums_bytes, sig)
-        sums = parse_sums(sums_bytes.decode("utf-8", "replace"))
+        sums_text = sums_bytes.decode("utf-8", "replace")
+        signed_for = sums_tag(sums_text)
+        if signed_for is None:
+            raise UpdateError(_("The signed list of checksums does not name its version, so it cannot be told from an older release's list"))
+        if signed_for != release.tag:
+            raise UpdateError(_("The signed list of checksums is for {signed}, not for {tag}: an older release offered as a new one").format(signed=signed_for, tag=release.tag))
+        sums = parse_sums(sums_text)
         if name not in sums:
             raise UpdateError(_("{name} is not in the signed list of checksums").format(name=name))
         _check_cancel(cancel)
@@ -499,8 +592,13 @@ def prepare(release: Release, platform: str, executable: str | Path, http: Http 
         if app is None:
             raise UpdateError(_("This system is updated by hand"))
         staging = staging_for(app)
-        if staging.exists():
-            shutil.rmtree(staging)
+        if staging.exists() or staging.is_symlink():
+            if is_our_staging(staging):
+                shutil.rmtree(staging)
+            else:
+                staging.rename(aside_name(staging))  # not ours: kept, under another name
+        staging.mkdir()
+        (staging / STAGING_MARK).write_bytes(b"")
         unpacker(file, staging, platform)
         new_copy = staging / ("Daykeeper.app" if kind == MAC_APP else "Daykeeper")
         inside = new_copy / ("Contents/MacOS/Daykeeper" if kind == MAC_APP else "Daykeeper.exe")
@@ -519,15 +617,53 @@ def prepare(release: Release, platform: str, executable: str | Path, http: Http 
 # ---- putting it in place (after this process has quit)
 
 
+SETUP_SWITCHES = ("/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/LAUNCH=1")
+
+
 def setup_command(setup: Path) -> list[str]:
-    """The installer, silent (the user confirmed already): it closes this app if it still
-    runs, installs over it and starts it again (LAUNCH=1, its [Run] entry)."""
-    return [str(setup), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/LAUNCH=1"]
+    """The installer, silent (the user confirmed already): it closes a copy that still runs
+    from the folder (by force when it does not close when asked), installs over it and
+    starts it again (LAUNCH=1, its [Run] entry)."""
+    return [str(setup), *SETUP_SWITCHES]
 
 
 def _ps(text: str | PurePath) -> str:
     """A PowerShell single-quoted literal: nothing in it is expanded."""
     return "'" + str(text).replace("'", "''") + "'"
+
+
+def windows_setup_script(pid: int, running_exe: Path, setup: Path, log: Path) -> str:
+    """PowerShell that waits for this process to end, then runs the setup (setup_command):
+    the app's files are free by then. When the app does not quit, nothing is run; when the
+    setup cannot start, the old app is started again."""
+    args = " ".join(setup_command(setup)[1:])
+    return f"""$ErrorActionPreference = 'Stop'
+$log = {_ps(log)}
+$exe = {_ps(running_exe)}
+$setup = {_ps(setup)}
+function Say([string]$text) {{ try {{ Add-Content -LiteralPath $log -Value ((Get-Date -Format s) + ' ' + $text) -Encoding UTF8 }} catch {{ }} }}
+Say 'waiting for the app to quit before the setup'
+$p = Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue
+if ($p -and $p.Path -and ($p.Path -ieq $exe)) {{
+    if (-not $p.WaitForExit(120000)) {{ Say 'the app did not quit in two minutes: the setup was not run'; exit 1 }}
+}}
+try {{
+    $info = New-Object System.Diagnostics.ProcessStartInfo $setup
+    $info.Arguments = {_ps(args)}
+    $info.UseShellExecute = $false
+    $s = [System.Diagnostics.Process]::Start($info)
+    Say ('started the setup, pid ' + $s.Id)
+}} catch {{
+    Say ('failed: ' + $_)
+    if (Test-Path -LiteralPath $exe) {{
+        $info = New-Object System.Diagnostics.ProcessStartInfo $exe
+        $info.WorkingDirectory = [System.IO.Path]::GetDirectoryName($exe)
+        $info.UseShellExecute = $false
+        [void][System.Diagnostics.Process]::Start($info)
+        Say 'started the old app again'
+    }}
+}}
+"""
 
 
 def windows_swap_script(pid: int, running_exe: Path, app: Path, new_copy: Path, staging: Path, log: Path) -> str:
@@ -543,6 +679,7 @@ $old = {_ps(old)}
 $new = {_ps(new_copy)}
 $staging = {_ps(staging)}
 $exeName = 'Daykeeper.exe'
+$mark = '{STAGING_MARK}'
 function Say([string]$text) {{ try {{ Add-Content -LiteralPath $log -Value ((Get-Date -Format s) + ' ' + $text) -Encoding UTF8 }} catch {{ }} }}
 function Start-App([string]$folder) {{
     $info = New-Object System.Diagnostics.ProcessStartInfo (Join-Path $folder $exeName)
@@ -552,13 +689,26 @@ function Start-App([string]$folder) {{
     $p = [System.Diagnostics.Process]::Start($info)
     Say ('started ' + $info.FileName + ' pid ' + $p.Id)
 }}
+function Aside([string]$path) {{
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $n = 0
+    do {{ $n++; $target = $path + '.' + $stamp + '-' + $n }} while (Test-Path -LiteralPath $target)
+    return $target
+}}
 Say 'waiting for the app to quit'
 try {{
     $p = Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue
     if ($p -and $p.Path -and ($p.Path -ieq {_ps(running_exe)})) {{
         if (-not $p.WaitForExit(120000)) {{ throw 'the app did not quit in two minutes' }}
     }}
-    if (Test-Path -LiteralPath $old) {{ Remove-Item -LiteralPath $old -Recurse -Force }}
+    if (Test-Path -LiteralPath $old) {{
+        if (Test-Path -LiteralPath (Join-Path $old $exeName) -PathType Leaf) {{ Remove-Item -LiteralPath $old -Recurse -Force }}
+        else {{
+            $aside = Aside $old
+            Move-Item -LiteralPath $old -Destination $aside
+            Say ('kept a folder that is not Daykeeper as ' + $aside)
+        }}
+    }}
     $moved = $false
     for ($i = 0; $i -lt 40 -and -not $moved; $i++) {{
         try {{ Move-Item -LiteralPath $app -Destination $old; $moved = $true }} catch {{ Start-Sleep -Milliseconds 500 }}
@@ -566,7 +716,7 @@ try {{
     if (-not $moved) {{ throw 'the app folder is still in use' }}
     try {{ Move-Item -LiteralPath $new -Destination $app }}
     catch {{ Move-Item -LiteralPath $old -Destination $app; throw }}
-    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath (Join-Path $staging $mark) -PathType Leaf) {{ Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }}
     Say 'swapped'
     Start-App $app
 }} catch {{
@@ -580,32 +730,50 @@ def powershell_command(script: str, system_root: str | None = None) -> list[str]
     """PowerShell running `script` given inline (-EncodedCommand: UTF-16 in base64, so
     no quoting can break it, and no script file for an execution policy to stop)."""
     root = system_root or os.environ.get("SYSTEMROOT") or r"C:\Windows"
-    exe = str(Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+    exe = str(PureWindowsPath(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
     return [exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", base64.b64encode(script.encode("utf-16-le")).decode("ascii")]
 
 
-def mac_swap_script(pid: int, app: PurePath, new_copy: PurePath, staging: PurePath, log: PurePath, launch: Sequence[str] = ("/usr/bin/open",)) -> str:
-    """sh that does on macOS what windows_swap_script does: wait, `<name>.old`, move,
-    start (with `open`), and the old bundle back when a step fails."""
+def mac_swap_script(pid: int, app: PurePath, new_copy: PurePath, staging: PurePath, log: PurePath, launch: Sequence[str] = ("/usr/bin/open",),
+                    running_exe: PurePath | None = None) -> str:
+    """sh that does on macOS what windows_swap_script does: wait (only while the process
+    is still the app: a reused process number is not waited for), `<name>.old`, move,
+    start (with `open`), and the old bundle back when a step fails. A `<name>.old` that is
+    not a Daykeeper bundle is kept under another name, never deleted."""
     q = shlex.quote
     start = " ".join(q(a) for a in launch)
+    exe = running_exe if running_exe is not None else app / "Contents" / "MacOS" / "Daykeeper"
     return f"""LOG={q(str(log))}
 APP={q(str(app))}
 OLD={q(str(old_for(app)))}
 NEW={q(str(new_copy))}
 STAGING={q(str(staging))}
+EXE={q(str(exe))}
 exec >>"$LOG" 2>&1
 echo "$(date) waiting for the app to quit"
-i=0
-while kill -0 {int(pid)} 2>/dev/null; do
-    sleep 0.5
-    i=$((i + 1))
-    if [ "$i" -gt 240 ]; then echo "the app did not quit"; exit 1; fi
-done
-rm -rf "$OLD"
+COMM=$(ps -p {int(pid)} -o comm= 2>/dev/null)
+if [ -n "$COMM" ] && [ "$COMM" != "$EXE" ] && [ "$(basename -- "$COMM")" != "$(basename -- "$EXE")" ]; then
+    echo "process {int(pid)} is not the app ($COMM): not waiting for it"
+else
+    i=0
+    while kill -0 {int(pid)} 2>/dev/null; do
+        sleep 0.5
+        i=$((i + 1))
+        if [ "$i" -gt 240 ]; then echo "the app did not quit"; exit 1; fi
+    done
+fi
+if [ -e "$OLD" ] || [ -L "$OLD" ]; then
+    if [ -f "$OLD/Contents/MacOS/Daykeeper" ]; then
+        rm -rf "$OLD"
+    else
+        ASIDE="$OLD.$(date +%Y%m%d-%H%M%S).$$"
+        if ! mv "$OLD" "$ASIDE"; then echo "could not move aside a folder that is not Daykeeper"; {start} "$APP"; exit 1; fi
+        echo "kept a folder that is not Daykeeper as $ASIDE"
+    fi
+fi
 if ! mv "$APP" "$OLD"; then echo "could not move the app aside"; {start} "$APP"; exit 1; fi
 if ! mv "$NEW" "$APP"; then echo "could not move the new app in"; mv "$OLD" "$APP"; {start} "$APP"; exit 1; fi
-rm -rf "$STAGING"
+if [ -f "$STAGING/{STAGING_MARK}" ]; then rm -rf "$STAGING"; fi
 echo "swapped"
 {start} "$APP"
 """
@@ -620,13 +788,13 @@ def apply_command(prepared: Prepared, platform: str, executable: str | Path, pid
     pid = os.getpid() if pid is None else pid
     log = log or swap_log()
     if prepared.kind == INSTALLED and prepared.setup is not None:
-        return setup_command(prepared.setup)
+        return powershell_command(windows_setup_script(pid, Path(executable), prepared.setup, log))
     app = app_location(platform, executable)
     if app is None or prepared.new_copy is None or prepared.staging is None:
         raise UpdateError(_("Nothing to put in place"))
     if prepared.kind == PORTABLE:
         return powershell_command(windows_swap_script(pid, Path(executable), app, prepared.new_copy, prepared.staging, log))
-    return ["/bin/sh", "-c", mac_swap_script(pid, app, prepared.new_copy, prepared.staging, log)]
+    return ["/bin/sh", "-c", mac_swap_script(pid, app, prepared.new_copy, prepared.staging, log, running_exe=Path(executable))]
 
 
 def launch_detached(command: list[str], platform: str = sys.platform) -> subprocess.Popen:
@@ -645,17 +813,17 @@ def launch_detached(command: list[str], platform: str = sys.platform) -> subproc
 
 def leftovers(platform: str = sys.platform, executable: str | Path = sys.executable, tempdir: str | None = None, now: float | None = None) -> list[Path]:
     """The old copy kept by a swap (`<name>.old`, when it holds a Daykeeper build), a
-    staging folder no update is using, and temp folders of earlier downloads."""
+    staging folder no update is using (when an update made it), and temp folders of
+    earlier downloads."""
     now = time.time() if now is None else now
     out: list[Path] = []
     app = app_location(platform, executable)
     if app is not None:
         old = old_for(app)
-        marker = old / ("Contents/MacOS/Daykeeper" if platform == "darwin" else "Daykeeper.exe")
-        if marker.is_file():
+        if is_build(old, platform):
             out.append(old)
         staging = staging_for(app)
-        if staging.is_dir():
+        if staging.is_dir() and is_our_staging(staging):
             out.append(staging)
     try:
         for p in Path(tempdir or tempfile.gettempdir()).glob(TEMP_PREFIX + "*"):

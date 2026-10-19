@@ -17,8 +17,8 @@ from daykeeper import update
 
 
 class SigningPair:
-    """An Ed25519 pair made for one test; `public` is base64 of the raw 32 bytes, as the
-    app's PUBLIC_KEY is."""
+    """An Ed25519 pair made for one test; `public` is base64 of the raw 32 bytes, as each
+    of the app's PUBLIC_KEYS is."""
 
     def __init__(self) -> None:
         self.private = Ed25519PrivateKey.generate()
@@ -41,8 +41,11 @@ def zip_of(files: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
-def sums_of(files: dict[str, bytes]) -> bytes:
-    return "".join(f"{hashlib.sha256(data).hexdigest()}  {name}\n" for name, data in files.items()).encode("ascii")
+def sums_of(files: dict[str, bytes], tag: str | None = None) -> bytes:
+    """SHA256SUMS.txt as CI makes it: the line "# daykeeper <tag>" (none when `tag` is
+    None), then `sha256sum`'s lines."""
+    head = f"{update.SUMS_HEADER}{tag}\n" if tag is not None else ""
+    return (head + "".join(f"{hashlib.sha256(data).hexdigest()}  {name}\n" for name, data in files.items())).encode("ascii")
 
 
 class FakeHttp:
@@ -95,12 +98,16 @@ def release_json(version: str, names: list[str], prerelease: bool = False, body:
     }
 
 
+OWN_TAG = "own"
+
+
 def signed_release(key: SigningPair, version: str, assets: dict[str, bytes], body: str = "", tamper: Callable[[dict[str, bytes]], None] | None = None,
-                   sign_with: SigningPair | None = None, with_sig: bool = True) -> tuple[update.Release, FakeHttp]:
+                   sign_with: SigningPair | None = None, with_sig: bool = True, sums_tag: str | None = OWN_TAG) -> tuple[update.Release, FakeHttp]:
     """A release of `assets` with SHA256SUMS.txt (and its .sig, signed by `sign_with` or
     `key`), and a FakeHttp serving it. `tamper(served)` changes what is served after the
-    sums were made (a swapped file)."""
-    sums = sums_of(assets)
+    sums were made (a swapped file). The list names the release's own tag unless
+    `sums_tag` names another, or None: no version line."""
+    sums = sums_of(assets, "v" + version if sums_tag == OWN_TAG else sums_tag)
     served = dict(assets)
     served[update.SUMS_NAME] = sums
     if with_sig:

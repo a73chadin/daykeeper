@@ -1497,4 +1497,9 @@ RU: dict[str, str] = {
     'Could not check for updates: {error}': 'Не удалось проверить обновления: {error}',
     'Not checked yet.': 'Ещё не проверялось.',
     'Last checked {when}.': 'Последняя проверка: {when}.',
+    "The signed list of checksums does not name its version, so it cannot be told from an older release's list": 'Подписанный список контрольных сумм не называет свою версию, поэтому его нельзя отличить от списка более старого релиза',
+    'The signed list of checksums is for {signed}, not for {tag}: an older release offered as a new one': 'Подписанный список контрольных сумм относится к {signed}, а не к {tag}: старый релиз выдан за новый',
+    'Daykeeper cannot write to the folder that holds Daykeeper.app ({folder}). Move Daykeeper.app to a folder of your own, such as Applications, and update again.': 'Daykeeper не может писать в папку, где лежит Daykeeper.app ({folder}). Перенесите Daykeeper.app в свою папку, например в «Программы», и обновите снова.',
+    'Could not install the update: {reason}. Nothing was changed, and the download was deleted.': 'Не удалось установить обновление: {reason}. Ничего не изменено, загрузка удалена.',
+    'The vault was locked, so nothing was updated. The download was deleted.': 'Хранилище заблокировано, поэтому ничего не обновлено. Загрузка удалена.',
 }

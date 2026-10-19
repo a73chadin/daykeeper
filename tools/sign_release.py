@@ -5,8 +5,10 @@
 reads the private key from the environment variable DAYKEEPER_SIGNING_KEY (base64 of the
 raw 32-byte Ed25519 private key; CI passes the repository secret of that name), signs the
 exact bytes of the file and writes `<file>.sig`: base64 of the 64-byte signature, one
-line. Then it checks the signature with the public key the app carries, so a secret that
-does not match the app fails the release here, not on every user's computer.
+line. The file must start with the line "# daykeeper <tag>" (CI writes it): the app
+refuses a list that does not name the release it was made for. Then it checks the
+signature with the public keys the app carries, so a secret that does not match the app
+fails the release here, not on every user's computer.
 
 The key never leaves this process: it is not printed, not logged and not written
 anywhere; an error names what is wrong with it, never its value. A missing or unreadable
@@ -62,6 +64,9 @@ def main(argv: list[str], env: Mapping[str, str] = os.environ, public_key: str |
         print(f"error: {exc}", file=sys.stderr)
         return 2
     data = sums.read_bytes()
+    if update.sums_tag(data.decode("utf-8", "replace")) is None:
+        print(f"error: the first line of {sums.name} must be '{update.SUMS_HEADER}<tag>': the app refuses a list that does not name its release", file=sys.stderr)
+        return 2
     signature = sign(data, key)
     del key
     sig_path = sums.with_name(sums.name + ".sig")
@@ -70,9 +75,9 @@ def main(argv: list[str], env: Mapping[str, str] = os.environ, public_key: str |
         update.verify_signature(data, signature, public_key)
     except update.UpdateError:
         sig_path.unlink()
-        print("error: the signature does not verify with the public key in daykeeper/update.py: the secret and the app's key are not a pair", file=sys.stderr)
+        print("error: the signature does not verify with any public key in daykeeper/update.py (PUBLIC_KEYS): the secret and the app's keys are not a pair", file=sys.stderr)
         return 1
-    print(f"signed {sums.name} ({len(data)} bytes) -> {sig_path.name}; verified with the app's public key")
+    print(f"signed {sums.name} ({len(data)} bytes) -> {sig_path.name}; verified with the app's public keys")
     return 0
 
 
