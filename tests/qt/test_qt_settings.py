@@ -5,6 +5,7 @@ real autostart entry, the assistants' hook files or their instructions."""
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,6 +25,7 @@ from daykeeper.qt.dialogs import data as data_dialogs  # noqa: E402
 from daykeeper.qt.dialogs import settings as settings_mod  # noqa: E402
 from daykeeper.qt.dialogs import settings_journal  # noqa: E402
 from daykeeper.security import GUARD_PIN  # noqa: E402
+from daykeeper.session import COPY_PREFIX  # noqa: E402
 from daykeeper.settings import read_settings  # noqa: E402
 
 PASSWORD = "test-master-1"
@@ -288,6 +290,11 @@ class DataDialogsTest(unittest.TestCase):
             self.assertTrue(copies)
             self.win._settings_win._open_copy(copies[0][0])
             opener.assert_called_once()
+        # the window is a mock, so nothing sweeps the temp folder of the copy: this test does
+        target = Path(opener.call_args[0][0])
+        self.assertTrue(target.parent.name.startswith(COPY_PREFIX), target)
+        shutil.rmtree(target.parent, ignore_errors=True)
+        self.assertFalse(target.parent.exists())
 
 
 if __name__ == "__main__":
