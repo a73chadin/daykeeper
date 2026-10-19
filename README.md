@@ -40,22 +40,32 @@ The window is built on Qt 6 (PySide6, under the LGPL — see
 
 ## Run
 
-Ready builds are on the [Releases](../../releases) page, no installation needed.
-Settings → General → Start opens the app when you sign in (per user: the Run key on
-Windows, a LaunchAgent on macOS, ~/.config/autostart elsewhere), optionally minimized;
-it still asks for the master password. The entry always points at the copy of the app
-that turned it on. A built app takes the entry over quietly at start only when the copy
-the entry points at is no longer there (moved, or deleted after an update), and only when
-it does not itself run from the temporary folder or from Downloads; an entry whose
-Daykeeper is still on disk stays as it is.
+Ready builds are on the [Releases](../../releases) page: an installer or a folder that
+runs as it is on Windows, a disk image or a zip on macOS.
 
-- Windows — [`Daykeeper-win64.zip`](../../releases/latest/download/Daykeeper-win64.zip):
+- Windows, installer — `Daykeeper-<version>-setup.exe`: for your user only, asks for no
+  administrator rights, installs into `%LOCALAPPDATA%\Programs\Daykeeper` and adds a
+  Start-menu entry; a desktop icon and the start with the system are boxes to tick on
+  the way. A newer setup installs over the older one (a running Daykeeper is closed
+  first: the setup asks). Remove it in Settings → Apps → Installed apps (or "Add or
+  remove programs"): the uninstaller never touches your data — the vault, its copies and
+  `settings.json` stay in `%APPDATA%\Daykeeper`, and its last message says so.
+- Windows, portable — [`Daykeeper-win64.zip`](../../releases/latest/download/Daykeeper-win64.zip):
   unpack anywhere and start `Daykeeper\Daykeeper.exe` (the window is up in well under a
-  second). On the first start Windows may warn about an unknown publisher: the files are
-  not signed.
-- macOS — [`Daykeeper-macos.zip`](../../releases/latest/download/Daykeeper-macos.zip),
-  unpack and drag `Daykeeper.app` to Applications. The app is not signed with an Apple
-  certificate, so macOS stops the first start. Once, either way:
+  second).
+- macOS — `Daykeeper-<version>.dmg`: open it and drag Daykeeper onto Applications; or
+  [`Daykeeper-macos.zip`](../../releases/latest/download/Daykeeper-macos.zip), unpack and
+  drag `Daykeeper.app` to Applications.
+
+**The first start: the builds are not code-signed.** Signing needs a certificate (a
+Windows code-signing certificate, an Apple Developer ID) the project does not have, so the
+systems warn once:
+
+- Windows SmartScreen shows "Windows protected your PC" for the setup or for
+  `Daykeeper.exe` from the zip: "More info" → "Run anyway". The setup, if Windows asks
+  about it, names an unknown publisher; it asks for no administrator rights either way.
+- macOS Gatekeeper stops the first start ("cannot be opened", or "damaged" for a
+  download it distrusts). Once, either way:
 
   1. Through the settings: double-click the app and close the warning, then System
      Settings → Privacy & Security → Security → "Open Anyway" next to Daykeeper, confirm
@@ -67,6 +77,52 @@ Daykeeper is still on disk stays as it is.
      ```
      xattr -dr com.apple.quarantine /Applications/Daykeeper.app
      ```
+
+  An update made by the app itself is not downloaded through a browser, carries no such
+  mark and starts without the warning.
+
+Whether a file really is the one the release built is a separate question from these
+warnings: see "Updates" below and "Check a download" further on.
+
+Settings → General → Start opens the app when you sign in (per user: the Run key on
+Windows, a LaunchAgent on macOS, ~/.config/autostart elsewhere), optionally minimized;
+it still asks for the master password. The entry always points at the copy of the app
+that turned it on. A built app takes the entry over quietly at start only when the copy
+the entry points at is no longer there (moved, or deleted after an update), and only when
+it does not itself run from the temporary folder or from Downloads; an entry whose
+Daykeeper is still on disk stays as it is.
+
+**Updates.** Daykeeper asks GitHub once a day whether a newer release is out (Settings →
+General → About: "Check for updates once a day", on by default; "Check for updates" asks
+at once). That is one request to GitHub's API with the plain User-Agent
+`Daykeeper/<version>` — nothing about you or your data, no other address. Pre-releases
+(`2.1.0-beta.1`) are offered only when "Offer test versions" is ticked. A newer version
+shows as a quiet note and as a line in About: "Version X is out — Update…". Nothing is
+downloaded until you press it, read the release notes and press "Update now":
+
+1. The vault is saved (an update never starts with unsaved changes) and copied to the
+   `backup` folder, as before any save.
+2. `SHA256SUMS.txt` and `SHA256SUMS.txt.sig` are downloaded and the signature is checked
+   with the public key built into the app; then the file for your copy — the setup for an
+   installed copy, `Daykeeper-win64.zip` for a portable folder, `Daykeeper-macos.zip` on
+   macOS — and its SHA-256 is checked against the signed list. Any mismatch: the update is
+   refused, says why, and the download is deleted. "Cancel" stops it at any point.
+3. Installed: the setup runs silently, closes the app, installs over it and starts the
+   new version. Portable folder: the new one is unpacked next to it as `Daykeeper.update`;
+   once the app has quit a small script renames the old folder to `Daykeeper.old`, puts
+   the new one in its place and starts it; the new one deletes `Daykeeper.old` when it has
+   started. macOS: the same for `Daykeeper.app` (it must lie in a folder you can write to,
+   such as Applications).
+
+A run from the source tree and a preview window never update themselves; on Linux an
+update is taken by hand.
+
+*How a download is trusted.* Every release's `SHA256SUMS.txt` is signed in CI with an
+Ed25519 key (`tools/sign_release.py`); the private half exists only as a secret of the
+repository, the public half is in `daykeeper/update.py` (`PUBLIC_KEY`), and CI checks the
+new signature against it before publishing. A file that was swapped on the release page
+or on the way does not match the signed list, and a list that was swapped does not match
+the signature. The same checks by hand: PLAYBOOK, section 9.
 
 **Coming from 1.x.** 2.0 opens the vault, `settings.json` and the journal inbox of 1.x
 as they are. After that, do not open the vault with a 1.x build again: 1.x does not know
@@ -102,8 +158,10 @@ files of their own, and a folder starts three times faster. The icon (`assets/ic
 `.icns`, `.png` — the file icon and the window icon) is drawn by `tools/make_icon.py`;
 rerun it only after changing the design (needs Pillow).
 
-Releases are built by GitHub Actions: a tag like `v2.1.0` runs the tests and builds on
-Windows and macOS, then attaches both zips and `SHA256SUMS.txt` to the release (a tag with
+Releases are built by GitHub Actions: a tag like `v2.1.0` (it must match the version in
+`daykeeper/__init__.py`) runs the tests and builds on Windows and macOS, then attaches the
+two zips, the setup (`packaging/daykeeper.iss`, Inno Setup), the disk image (`hdiutil`),
+`SHA256SUMS.txt` and its signature `SHA256SUMS.txt.sig` to the release (a tag with
 a suffix — `v2.1.0-beta.1`, `v2.1.0-rc.1` — makes a pre-release: still in development,
 marked so on GitHub and never offered as the latest) (`.github/workflows/build.yml`,
 actions pinned to commit hashes). Check a download:
@@ -111,15 +169,19 @@ actions pinned to commit hashes). Check a download:
 ```
 certutil -hashfile Daykeeper-win64.zip SHA256    # Windows
 shasum -a 256 Daykeeper-macos.zip                # macOS
-gh attestation verify Daykeeper-win64.zip --owner <the repository owner>   # provenance: which workflow run built it
+gh attestation verify Daykeeper-win64.zip --owner a73chadin   # provenance: which workflow run built it
 ```
+
+and compare with `SHA256SUMS.txt`; whether that list itself is the signed one — PLAYBOOK,
+section 9.
 
 The release also publishes a signed provenance statement for each file (GitHub's build
 attestation): `gh attestation verify` proves the file came out of this repository's
 workflow at a given commit. The binaries themselves are not code-signed — that needs a
 certificate (a Windows code-signing certificate, an Apple Developer ID) that the project
 does not have; until it does, Windows SmartScreen and macOS Gatekeeper will warn as
-described above.
+described above. `build.bat` also builds the setup when Inno Setup's `iscc` is on the
+PATH, and `build.sh` the disk image.
 
 The vault file lives in the data folder — `%APPDATA%\Daykeeper\vault.pkv` on Windows,
 `~/Library/Application Support/Daykeeper/vault.pkv` on macOS; another path can be passed
@@ -559,6 +621,10 @@ Settings → Data:
 - The Qt libraries are separate files of the build and are not checked at start (the LGPL
   lets the user replace them); the app clears `QT_PLUGIN_PATH` before Qt starts, so a
   plugin folder from the environment is not loaded.
+- The update check is one request a day to GitHub's API (it can be switched off); an
+  update is downloaded only after a click and used only when the signature of
+  `SHA256SUMS.txt` holds for the key built into the app and the file's SHA-256 is the
+  one listed (see "Updates" above).
 - A forgotten master password cannot be recovered.
 
 Limitation: Python cannot wipe strings from memory. A secret that was shown or copied,
@@ -580,7 +646,8 @@ themes), `boot` (the theme from the settings before the window), `errlog` (`erro
 `i18n` with `locale_ru`; and the services — `session` (the vault's life: open, save, lock,
 the inbox, the export), `jobs` (a thread pool read on the window's thread), `runner` (a
 routine's subprocess), `assistant_runs`, `hub` (the event hub), `hotkey`, `clipboard`,
-`autostart`, `win32` (every call into Windows). The console helper (`cli`, `cli_main.py`,
+`autostart`, `update` (the check for a new release, the signed download and the swap
+scripts), `win32` (every call into Windows). The console helper (`cli`, `cli_main.py`,
 `inbox.py`) imports only `settings`, `i18n`, `journal` and `hookrules`.
 
 The window — `daykeeper/qt/`, the only package that imports PySide6: `app` (the main
@@ -588,7 +655,7 @@ window, the top bar, the shortcuts, the macOS menu), `unlock` (the unlock screen
 (the locks), `theme` (the two themes as objects, the style sheet), `icons` (vector
 icons), `timers`, `jobs`, `errors` (every event handler is guarded), `pages/` (one module
 per tab) and `dialogs/` (the settings sections, the data dialogs, the viewer, the quick
-window, the digest, the clipboard history, the AI dialogs, the error log; the calendar's
+window, the digest, the clipboard history, the AI dialogs, the error log, the update; the calendar's
 event editor is `event_editor` in `pages/calendar.py`) and `widgets/`. A tab reaches the window only through the methods of its
 `shell`; a tab is made on its first visit. `main.py` starts it.
 

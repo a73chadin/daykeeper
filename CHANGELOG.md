@@ -1,5 +1,42 @@
 # Changes
 
+## 2.1.0 (unreleased) — an installer and signed updates
+
+**Install**
+- Windows: `Daykeeper-<version>-setup.exe` (Inno Setup, `packaging/daykeeper.iss`) — for
+  your user only, no administrator rights, into `%LOCALAPPDATA%\Programs\Daykeeper`;
+  a Start-menu entry, an optional desktop icon, an optional start with the system (the
+  same Run value the app writes), an uninstall entry in Settings → Apps. A newer setup
+  installs over the older one and closes a running copy first (it asks). The uninstaller
+  removes the start with the system only when it starts this copy, and never touches the
+  data folder — its last message says so. The zip stays for a portable folder.
+- macOS: `Daykeeper-<version>.dmg` with the app and a link to Applications; the zip stays.
+- The builds are still not code-signed: the README says what SmartScreen and Gatekeeper
+  show at the first start and how to get past it.
+
+**Updates**
+- Once a day (on by default; Settings → General → About → "Check for updates once a day")
+  the app asks GitHub which release is the latest — one request with the User-Agent
+  `Daykeeper/<version>`, nothing else. A newer version is a quiet note and a line in
+  About: "Version X is out — Update…"; "Check for updates" asks at once. Pre-releases
+  only when "Offer test versions" is ticked.
+- "Update…" shows the release notes; only "Update now" downloads. The release's
+  `SHA256SUMS.txt` must carry a valid Ed25519 signature (`SHA256SUMS.txt.sig`, made in CI
+  by `tools/sign_release.py`) for the key built into the app, and the downloaded file
+  must have the SHA-256 the list gives; otherwise the update is refused and the download
+  deleted. Cancel works at any point.
+- Before anything is replaced the vault is saved (an update never starts with unsaved
+  changes) and copied to `backup`. An installed copy runs the new setup silently and
+  starts again; a portable folder or a macOS bundle is unpacked next to itself and
+  swapped by a small script after the app quits, the old one kept as `Daykeeper.old`
+  until the new one has started. A run from source and a preview window never update.
+
+**Build**
+- The release adds the setup, the disk image and `SHA256SUMS.txt.sig`; all are in the
+  checksums and in the provenance attestations. A tag must match the version in
+  `daykeeper/__init__.py`. `build.bat` builds the setup when `iscc` is on the PATH,
+  `build.sh` the disk image.
+
 ## 2.0.0 — one window, on Qt
 
 > **⚠ After 2.0, do not open the vault with a 1.x build.** 2.0 reads the vault, the

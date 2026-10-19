@@ -9,7 +9,8 @@ Daykeeper Multitool is a personal keeper of passwords, tokens and keys plus book
 a verification journal, notes, a daily routine of quick-launch scripts, a calendar and
 GitLab / Jira notifications. One encrypted file, one master password, everything on your
 computer. The only network traffic is what you switch on: the GitLab and Jira checks, the
-site icons of bookmarks and the links you open.
+site icons of bookmarks, the daily update check (on by default, one request to GitHub)
+and the links you open.
 
 Since 2.0 the app is one Qt window (it needs Windows 10 1809+ or macOS 14+). The vault
 of 1.x opens as it is — but do not open it with a 1.x build afterwards: when it saves,
@@ -19,7 +20,7 @@ routines' event triggers and project filters, and the hashes of accepted scripts
 
 | What | Where |
 |---|---|
-| Program | the `Daykeeper` folder with `Daykeeper.exe` (Windows, from `Daykeeper-win64.zip`) or `Daykeeper.app` (macOS) from the Releases page, or from `dist\` after `build.bat` / `build.sh` |
+| Program | Windows: installed by `Daykeeper-<version>-setup.exe` into `%LOCALAPPDATA%\Programs\Daykeeper`, or the `Daykeeper` folder with `Daykeeper.exe` from `Daykeeper-win64.zip`; macOS: `Daykeeper.app` from the `.dmg` or the zip — from the Releases page, or from `dist\` after `build.bat` / `build.sh`. The uninstaller removes only this, never the data folder |
 | Vault (passwords, bookmarks, journal, notes, routines, calendar, clipboard history, integrations, lock settings — encrypted) | `<data folder>\vault.pkv` |
 | Automatic copies (the latest 20 and the last one of each of the past 14 days, also encrypted) | `<data folder>\backup\` |
 | Copies kept beside the vault: a conflict, before an import, before a restore (never deleted) | `<data folder>\vault-conflict-…pkv` and the like |
@@ -335,8 +336,55 @@ policy bypassed for that run only. The output window shows the error text.
 history" mark (Windows only).
 
 **The build fails with "permission denied".** The app is running: close it, then run
-`build.bat` again. **It fails on the size check** — the folder grew past 95 MB: something
+`build.bat` again. **No setup in `dist\`** — `build.bat` builds it only when Inno Setup's
+`iscc` is on the PATH (CI installs Inno Setup itself). **It fails on the size check** — the folder grew past 95 MB: something
 new pulled in a part of Qt; see `packaging/qt_filter.py`.
+
+**Updates.** Settings → General → About shows what the last check found.
+
+- *"Could not check for updates: …"* — GitHub was not reachable (a proxy, a VPN, no
+  network) or answered with an error (`HTTP 403` — too many requests from your address
+  for a while; it passes by itself). The next daily check tries again; "Check for
+  updates" tries now.
+- *"The update was refused: … signature … does not match"* or *"… checksum differs"* —
+  what was downloaded is not what the release build made: a file swapped on the way (a
+  proxy that rewrites downloads) or on the release page. Nothing was changed and the
+  download is deleted. Do not install that release by hand either; check it as below and
+  report it (SECURITY.md).
+- *"The release has no Daykeeper-<version>-setup.exe"* — the release is still being
+  uploaded, or it is an older one without an installer: try later, or update by hand.
+- *"Daykeeper cannot write next to its folder"* — a portable folder under `Program
+  Files` or another folder you cannot write to: move the `Daykeeper` folder somewhere of
+  your own, or use the installer. On macOS: *"runs this copy from a protected place"* —
+  move `Daykeeper.app` to Applications first.
+- *The app closed for the update and did not come back.* Installed: start it from the
+  Start menu; the setup's log is in `%TEMP%\Setup Log *.txt`. Portable folder or macOS:
+  the swap script writes `Daykeeper-update.log` in the temporary folder (`%TEMP%`;
+  `$TMPDIR` on macOS). The old copy is never deleted before the new one has started: if
+  `Daykeeper.old` (or `Daykeeper.app.old`) is still there next to the app, the new one
+  did not start — delete the new `Daykeeper` folder and rename `Daykeeper.old` back.
+  Your data is not in these folders; the vault was also copied to `backup` right before
+  the update.
+- *"There is a new version" every day after an update by hand* — the copy you start is
+  still the old one (a second portable folder, an old shortcut).
+
+**Check a download by hand.** In the folder with the downloaded files (from the release
+page: the file, `SHA256SUMS.txt` and `SHA256SUMS.txt.sig`):
+
+1. The checksum: `certutil -hashfile Daykeeper-2.1.0-setup.exe SHA256` (Windows) or
+   `shasum -a 256 Daykeeper-2.1.0.dmg` (macOS) must print the line `SHA256SUMS.txt`
+   gives for that file.
+2. The list is the signed one (Python with `cryptography`, e.g. the source tree's venv):
+
+   ```
+   python -c "import base64,sys; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey as K; K.from_public_bytes(base64.b64decode('PfX6chME57winjkX63RGCzrV8Ey+owju5vhriuDzrdM=')).verify(base64.b64decode(open('SHA256SUMS.txt.sig').read()), open('SHA256SUMS.txt','rb').read()); print('signature OK')"
+   ```
+
+   An `InvalidSignature` error means the list is not the one the release build signed.
+   The key is the one in `daykeeper/update.py`.
+3. Which build made it: `gh attestation verify Daykeeper-2.1.0-setup.exe --owner a73chadin`
+   (GitHub CLI) checks the signed provenance statement of the release: the repository,
+   the workflow run and the commit that built the file.
 
 **The start with the system opens an old copy.** Turn it off and on in Settings → General:
 it then points at the copy you run. A built 2.0 also takes over an entry of another copy
@@ -368,7 +416,8 @@ when it says "damaged", remove the quarantine flag in Terminal:
   file is plain text — delete it; in the CSV, values starting with `=`, `+`, `-` or `@` get an
   apostrophe so spreadsheets do not run them.
 - Network: the GitLab and Jira checks (only when "Watch" is on), the site icons of
-  bookmarks (can be switched off in Settings → General), the hook asking GitLab who the
+  bookmarks (can be switched off in Settings → General), the daily update check (one
+  request to GitHub's API, switched off in Settings → General → About), the hook asking GitLab who the
   author of an MR is through your own `glab`, and links you open. Sending to an AI
   assistant runs the assistant you have (Claude Code, Codex) with the text the dialog
   showed; Daykeeper itself talks to no model.
