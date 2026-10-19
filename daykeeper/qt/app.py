@@ -321,6 +321,9 @@ class MainWindow(QMainWindow):
         from .dialogs.cliphistory import ClipWatch
 
         self.clip = ClipWatch(self)
+        from .dialogs.update import UpdateWatch
+
+        self.updates = UpdateWatch(self)  # the daily check for a new release and the update itself
         # the events of the integrations, for everyone who cares (the feed, routines by event);
         # a subscriber's error goes to errors.log beside the vault, as one in a click does
         self.hub = Hub(on_error=self._hub_error)
@@ -345,6 +348,7 @@ class MainWindow(QMainWindow):
         self.show_unlock()
         if self.background_jobs:  # a preview copy takes no key from the rest of the computer
             self.quick.start_hotkey()
+        self.updates.start()  # a built app only: leftovers of an update go, the daily check is booked
 
     def _init_background(self) -> None:
         from .pages.integrations import GitLabWatcher, JiraWatcher
@@ -481,6 +485,7 @@ class MainWindow(QMainWindow):
         if self.runs is not None:
             self.runs.on_unlock_later()
         self.digest.on_unlock()  # once a day, a moment after the routines of the unlock
+        self.updates.on_unlock()  # a new version found while locked is told now
 
     def show_main(self) -> None:
         self._drop_pages()

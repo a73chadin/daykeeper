@@ -352,6 +352,10 @@ class SettingsWindow(QDialog):
         about.setFont(theme.font(12, bold=True))
         g.addWidget(about)
         g.addWidget(label(_("Passwords, bookmarks, the journal, notes, routines and GitLab news in one encrypted file."), "muted", s.inner))
+        from .update import UpdateRow
+
+        self.update_row = UpdateRow(self.shell.updates, s.inner)
+        g.addWidget(self.update_row)
         releases = button(_("Releases and changes ↗"), "small", s.inner)
         releases.setToolTip(_("Opens the releases page: what is new, the latest build and its SHA256."))
         releases.clicked.connect(lambda: webbrowser.open(RELEASES_URL))
