@@ -1,6 +1,6 @@
 # Changes
 
-## 2.1.0 (unreleased) — an installer and signed updates
+## 2.1.0 — an installer and signed updates
 
 **Install**
 - Windows: `Daykeeper-<version>-setup.exe` (Inno Setup, `packaging/daykeeper.iss`) — for
