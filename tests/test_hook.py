@@ -138,7 +138,7 @@ class OwnRuleTest(unittest.TestCase):
         self.assertEqual(hook.classify(bash("python write-cases.py --issue APP-101", "ok"), config=HookConfig(rules=[key])), [("manual", "APP-101")])
         mr = Rule(status="review", pattern="my-review-tool", take="mr")
         self.assertEqual(hook.classify(bash("my-review-tool !42", ""), config=HookConfig(rules=[mr])), [("review", "!42")])
-        grp = Rule(status="note", pattern=r"triage (\d+)", regex=True, take="match", where="any")
+        grp = Rule(status="note", pattern=r"cleanup (\d+)", regex=True, take="match", where="any")
         self.assertEqual(hook.classify(bash("echo", "weekly cleanup 1042 done"), config=HookConfig(rules=[grp])), [("note", "1042")])
 
     def test_also_and_disabled(self):
