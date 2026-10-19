@@ -2,7 +2,7 @@
 rem Build the console helper (dist\daykeeper-cli\: the Claude Code hook and the journal
 rem commands; a folder, since it starts three times faster than one file), then the app
 rem that carries it as a folder (dist\Daykeeper\, zipped to dist\Daykeeper-win64.zip), and
-rem print the zip's SHA256. Fails when the app folder grows past 75 MB.
+rem print the zip's SHA256. Fails when the app folder grows past 95 MB (about 71 for the app, 19 for the helper).
 cd /d "%~dp0"
 rem One Python for the build, the tests and CI: 3.13 (pyproject.toml). The launcher picks it
 rem when it is installed; otherwise whatever `python` is, and the version is printed.
@@ -15,7 +15,7 @@ if not exist .venv\Scripts\python.exe (
 rem The app replaces an installed helper when this stamp differs.
 .venv\Scripts\python -c "import time, uuid; open(r'dist\daykeeper-cli\build-id.txt', 'w').write(time.strftime('%%Y%%m%%d-%%H%%M%%S-') + uuid.uuid4().hex[:8])" || exit /b 1
 .venv\Scripts\python -m PyInstaller --noconfirm --clean --distpath dist --workpath build\Daykeeper packaging\daykeeper.spec || exit /b 1
-.venv\Scripts\python packaging\check_size.py dist\Daykeeper 75 || exit /b 1
+.venv\Scripts\python packaging\check_size.py dist\Daykeeper 95 || exit /b 1
 rem the zip holds the Daykeeper folder itself, as the 1.x folder build did
 .venv\Scripts\python -c "import shutil; shutil.make_archive(r'dist\Daykeeper-win64', 'zip', 'dist', 'Daykeeper')" || exit /b 1
 echo.

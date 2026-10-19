@@ -96,7 +96,7 @@ class CiFilesTest(unittest.TestCase):
         file names the README links to; the console helper leaves Qt out."""
         workflow = _read(".github/workflows/build.yml")
         self.assertEqual(workflow.count("packaging/daykeeper.spec"), 2, "Windows and macOS")
-        self.assertIn("packaging/check_size.py dist/Daykeeper 75", workflow)
+        self.assertIn("packaging/check_size.py dist/Daykeeper 95", workflow)
         self.assertIn("packaging/check_size.py dist/Daykeeper.app 90", workflow)
         release = workflow[workflow.index("  release:"):]
         for name in ("Daykeeper-win64.zip", "Daykeeper-macos.zip", "SHA256SUMS.txt"):

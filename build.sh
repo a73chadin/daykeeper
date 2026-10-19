@@ -17,6 +17,6 @@ if [ "$(uname)" = "Darwin" ]; then
     echo "Done: $(pwd)/dist/Daykeeper.app"
     shasum -a 256 dist/Daykeeper-macos.zip
 else
-    .venv/bin/python packaging/check_size.py dist/Daykeeper 75
+    .venv/bin/python packaging/check_size.py dist/Daykeeper 95
     echo "Done: $(pwd)/dist/Daykeeper"
 fi

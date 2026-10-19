@@ -95,7 +95,7 @@ Build it yourself — `build.bat` on Windows builds the console helper
 `dist/Daykeeper.app` (zipped to `dist/Daykeeper-macos.zip`). Both build from one
 PyInstaller spec, `packaging/daykeeper.spec`, install the build tools from
 `requirements-build.txt` (exact versions with hashes), check the size of the result
-(`packaging/check_size.py`: 75 MB for the Windows folder, 90 MB for the bundle) and print
+(`packaging/check_size.py`: 95 MB for the Windows folder, 90 MB for the bundle) and print
 its SHA256. The build leaves out the parts of Qt the app does not use
 (`packaging/qt_filter.py`) and is a folder, not one file: the LGPL wants Qt's libraries as
 files of their own, and a folder starts three times faster. The icon (`assets/icon.ico`,

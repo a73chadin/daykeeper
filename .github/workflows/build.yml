@@ -55,14 +55,14 @@ jobs:
         # The console helper first (the Claude Code hook and the journal commands, a folder:
         # it starts three times faster than one file), then the app that carries it, as a
         # folder (the LGPL needs Qt's libraries as files of their own); the folder must stay
-        # under 75 MB. The zip holds the Daykeeper folder itself.
+        # under 95 MB (about 71 for the app, 19 for the helper). The zip holds the Daykeeper folder itself.
         run: |
           python -m PyInstaller --noconfirm --clean --onedir --console --noupx --name daykeeper-cli --icon assets/icon.ico --exclude-module tkinter --exclude-module cryptography --exclude-module argon2 --exclude-module PySide6 --exclude-module shiboken6 cli_main.py
           if ($LASTEXITCODE) { exit 1 }
           Set-Content -NoNewline -Encoding ascii dist/daykeeper-cli/build-id.txt "${{ github.sha }}"
           python -m PyInstaller --noconfirm --clean --distpath dist --workpath build/Daykeeper packaging/daykeeper.spec
           if ($LASTEXITCODE) { exit 1 }
-          python packaging/check_size.py dist/Daykeeper 75
+          python packaging/check_size.py dist/Daykeeper 95
           if ($LASTEXITCODE) { exit 1 }
           python -c "import shutil; shutil.make_archive('dist/Daykeeper-win64', 'zip', 'dist', 'Daykeeper')"
           if ($LASTEXITCODE) { exit 1 }

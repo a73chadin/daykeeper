@@ -335,7 +335,7 @@ policy bypassed for that run only. The output window shows the error text.
 history" mark (Windows only).
 
 **The build fails with "permission denied".** The app is running: close it, then run
-`build.bat` again. **It fails on the size check** — the folder grew past 75 MB: something
+`build.bat` again. **It fails on the size check** — the folder grew past 95 MB: something
 new pulled in a part of Qt; see `packaging/qt_filter.py`.
 
 **The start with the system opens an old copy.** Turn it off and on in Settings → General:
