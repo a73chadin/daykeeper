@@ -1,0 +1,246 @@
+"""Locks of the Qt window: the idle lock of the app, the lock on minimize, the limit on wrong
+codes, and the prompts that ask for the master password before a secret or a weaker
+setting. The same rules as the 1.x Tk window had.
+
+The guard screen itself belongs to the Passwords tab (pages/vault.GuardScreen); this
+controller decides when it comes down and goes up."""
+
+from __future__ import annotations
+
+import math
+import time
+from collections.abc import Callable
+
+import shiboken6
+from PySide6.QtCore import QEvent, QObject, QTimer
+from PySide6.QtWidgets import QApplication
+
+from ..i18n import _
+from ..security import FAIR, GOOD, GUARD_PIN, STRONG, WEAK, Attempts, IdleClock, password_strength
+from .dialogs.base import ask_secret
+from .timers import Ticker
+from .errors import guard_events
+
+IDLE_CHECK_MS = 5_000
+MINIMIZE_LOCK_MS = 50  # the window must still be minimized after this
+# what counts as the user doing something (Tk: <KeyPress>, <ButtonPress>, <MouseWheel>, <Motion>)
+ACTIVITY = frozenset({QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.Wheel, QEvent.Type.MouseMove})
+
+
+def strength_text(pw: str) -> str:
+    """Under a new master password: how hard it is to guess, and what helps."""
+    if not pw:
+        return ""
+    return {
+        WEAK: _("Weak: easy to guess. A phrase of four unrelated words is long and easy to remember."),
+        FAIR: _("Fair. Longer is better: a phrase of four unrelated words."),
+        GOOD: _("Good."),
+        STRONG: _("Strong."),
+    }[password_strength(pw)]
+
+
+@guard_events
+class SecurityController(QObject):
+    """Made once with the window, a child of it. `vault_locked` — the Passwords tab is
+    behind its guard; `secrets_open()` is what every place that shows a secret asks first."""
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.window = window
+        self._idle = IdleClock(time.monotonic())
+        self.attempts = Attempts()  # wrong codes in a row; only the master password at unlock clears it
+        self.vault_locked = False
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)  # removed by Qt when this object goes with the window
+        self.ticker = Ticker(self, IDLE_CHECK_MS, self.check_idle)
+        self.ticker.start()
+
+    @property
+    def vault(self):
+        return self.window.vault
+
+    def reset(self) -> None:
+        """The main screen is made anew (unlock): no guard is on it yet."""
+        self.vault_locked = False
+
+    # ---- idle tracking
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() in ACTIVITY:
+            self._idle.touch(time.monotonic())
+        return False
+
+    def touch(self) -> None:
+        self._idle.touch(time.monotonic())
+
+    def check_idle(self, now: float | None = None) -> None:
+        if self.vault is None:
+            return
+        prefs = self.vault.security
+        now = time.monotonic() if now is None else now
+        if self._idle.due(now, prefs.app_lock_min):
+            self.window.lock()
+            return
+        if prefs.guarded and not self.vault_locked and self._idle.due(now, prefs.vault_lock_min):
+            self.lock_secrets()
+
+    def on_minimized(self) -> None:
+        """The window went to the taskbar: lock it there when the settings ask for it."""
+        if self.vault is None or not self.vault.security.lock_on_minimize:
+            return
+        QTimer.singleShot(MINIMIZE_LOCK_MS, self, self._lock_if_still_minimized)
+
+    def _lock_if_still_minimized(self) -> None:
+        if self.vault is not None and self.window.isMinimized():
+            self.window.lock()
+
+    # ---- the Passwords tab guard
+
+    def secrets_open(self) -> bool:
+        return self.vault is not None and (not self.vault.security.guarded or not self.vault_locked)
+
+    def lock_secrets(self) -> None:
+        """Lock the Passwords tab (and the secrets on bookmark tiles) right now."""
+        if self.vault is None or not self.vault.security.guarded:
+            return
+        self.window.save_now()
+        self.vault_locked = True
+        self.window.page("vault").guard(True)  # the list and the card go, the card forgets the entry
+        if "bookmarks" in self.window.pages:
+            self.window.pages["bookmarks"].refresh(keep_scroll=True)
+        self._close_entry_windows()
+        self.window.set_status(_("Passwords are locked"))
+
+    def _close_entry_windows(self) -> None:
+        """The windows that name entries (the quick window, the digest, the expiring keys,
+        the clipboard history) go with the guard: built while it was open, they would go on
+        showing names and logins behind it. The calendar names no entry behind the guard
+        and redraws on its next visit (its view key holds the guard)."""
+        from .dialogs.cliphistory import ClipHistoryWindow
+        from .dialogs.digest import DigestWindow
+        from .dialogs.expiry import ExpiryDialog
+        from .dialogs.quick import QuickWindow
+
+        quick = getattr(self.window, "quick", None)
+        if quick is not None and isinstance(getattr(quick, "window", None), QuickWindow) and shiboken6.isValid(quick.window):
+            quick.window.hide()
+        for child in list(getattr(self.window, "_children", ())):
+            if isinstance(child, (DigestWindow, ExpiryDialog, ClipHistoryWindow)) and shiboken6.isValid(child):
+                child.close()
+        calendar = self.window.pages.get("calendar")
+        if calendar is not None and calendar.isVisible():
+            calendar.refresh(keep_scroll=True)
+
+    def restore_guard(self) -> None:
+        """The Passwords tab was made anew while locked (an undo rebuilt it): behind the guard too."""
+        if self.vault_locked and "vault" in self.window.pages:
+            self.window.pages["vault"].guard(True)
+
+    def unlock_secrets(self) -> None:
+        self.vault_locked = False
+        self.touch()
+        if "vault" in self.window.pages:
+            self.window.pages["vault"].guard(False)
+        if "bookmarks" in self.window.pages:
+            self.window.pages["bookmarks"].refresh(keep_scroll=True)
+
+    def code_matches(self, code: str) -> bool:
+        prefs = self.vault.security
+        if prefs.vault_guard == GUARD_PIN:
+            return prefs.check_pin(code)
+        return self.vault.check_password(code)
+
+    def limited(self, check: Callable[[str], bool], wrong: str) -> Callable[[str], bool | str]:
+        """`check(code)` behind the attempt limit (security.Attempts): the result is True
+        for a right code, else the text to show under the field."""
+        def accept(code: str) -> bool | str:
+            now = time.monotonic()
+            wait = self.attempts.wait(now)
+            if wait:
+                return _("Too many wrong tries. Wait {n} s").format(n=math.ceil(wait))
+            if check(code):
+                self.attempts.ok()
+                return True
+            if self.attempts.fail(now):
+                QTimer.singleShot(0, self.window, self.window.lock)  # after the prompt has answered
+                return _("Too many wrong tries: the app is locked")
+            return wrong
+        return accept
+
+    def _code_label(self) -> str:
+        return _("PIN code") if self.vault.security.vault_guard == GUARD_PIN else _("Master password")
+
+    def require_secrets(self, then: Callable[[], object]) -> None:
+        """Run `then` once the secrets are open: right away, or after the code is entered."""
+        if self.secrets_open():
+            then()
+            return
+
+        def opened() -> None:
+            self.unlock_secrets()
+            then()
+
+        ask_secret(self.window, _("Passwords are locked"), self._code_label(), _("Unlock"), self.limited(self.code_matches, _("Wrong code")), opened)
+
+    def confirm_master(self, title: str, then: Callable[[], object]) -> None:
+        """Ask for the master password, then run `then` — for changes that weaken the locks."""
+        ask_secret(self.window, title, _("Master password"), _("Continue"), self.limited(self.vault.check_password, _("Wrong master password")), then)
+
+    def pin_dialog(self, after: Callable[[], object] | None = None, parent=None) -> None:
+        """Set or change the PIN; changing it asks for the master password."""
+        from PySide6.QtWidgets import QLabel
+
+        from ..security import pin_problem
+        from .dialogs.base import Dialog, button, label
+        from .widgets.secret_edit import SecretEdit
+
+        prefs = self.vault.security
+        dlg = Dialog(parent or self.window, _("PIN code"))
+        fields = []
+        for row, text in enumerate((_("Master password"), _("New PIN"), _("Once more"))):
+            dlg.box.addWidget(QLabel(text, dlg), row, 0)
+            edit = SecretEdit(dlg)
+            edit.setMinimumWidth(edit.fontMetrics().averageCharWidth() * 26)
+            dlg.box.addWidget(edit, row, 1)
+            fields.append(edit)
+        master, p1, p2 = fields
+        dlg.box.addWidget(label(_("4–12 digits"), "muted", dlg), 3, 1)
+        err = label("", "error", dlg)
+        dlg.box.addWidget(err, 4, 0, 1, 2)
+        accept = self.limited(self.vault.check_password, _("Wrong master password"))
+
+        def apply() -> None:
+            result = accept(master.text())
+            if result is not True:
+                err.setText(str(result))
+                master.wipe()
+                return
+            problem = pin_problem(p1.text())
+            if problem:
+                err.setText(_("Digits only") if problem == "digits" else _("4–12 digits"))
+                return
+            if p1.text() != p2.text():
+                err.setText(_("PIN codes do not match"))
+                return
+            prefs.set_pin(p1.text())
+            for f in fields:
+                f.wipe()
+            self.window.save_now()
+            dlg.accept()
+            self.window.set_status(_("PIN code saved"))
+            if after is not None:
+                after()
+
+        save = button(_("Save"), "primary", dlg)
+        save.clicked.connect(apply)
+        dlg.box.addWidget(save, 5, 0, 1, 2)
+        dlg.keys(apply)
+        def wipe_all(_result: int) -> None:
+            for f in fields:
+                f.wipe()
+
+        dlg.finished.connect(wipe_all)
+        master.setFocus()
+        dlg.open()
+        self.last_dialog = dlg  # tests reach it here

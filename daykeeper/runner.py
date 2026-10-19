@@ -1,0 +1,185 @@
+"""Running a routine: a subprocess read by a thread, its lines and end through a queue;
+or a separate console window that stays open. No tkinter: tested with a Python child."""
+
+from __future__ import annotations
+
+import os
+import queue
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from typing import Any
+
+from . import win32
+
+MAC = sys.platform == "darwin"
+CREATE_NO_WINDOW = 0x08000000
+CREATE_NEW_CONSOLE = 0x00000010
+
+
+def _oem_encoding() -> str:
+    return win32.oem_codepage() or "utf-8"
+
+
+def decode_line(raw: bytes) -> str:
+    """Script output: UTF-8 when it is, else the console code page (cmd and old tools)."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode(_oem_encoding(), errors="replace")
+
+
+class Run:
+    """One run of a routine in a background thread; lines and the end come through a
+    queue as ("line", text) and ("end", exit code). `auto` — started by the schedule.
+    `notify`, when given, is called on the reading thread after each thing it queues;
+    `env` — variables added over the current environment (an event's DAYKEEPER_* values)."""
+
+    def __init__(self, routine: Any, argv: list[str] | None, shell: str, cwd: str, auto: bool = False, notify: Any = None, env: dict[str, str] | None = None):
+        self.routine = routine
+        self.auto = auto
+        self.notify = notify
+        self.started = time.time()
+        self.ended: float | None = None
+        self.code: int | None = None
+        self.lines: list[str] = []
+        self.queue: queue.Queue = queue.Queue()
+        child_env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1") | (env or {})
+        flags = CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        self.proc: subprocess.Popen[bytes] | None
+        try:
+            self.proc = subprocess.Popen(  # noqa: S603 — the user's own routine from the encrypted vault
+                argv if argv else shell,
+                shell=not argv,
+                cwd=cwd or None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                env=child_env,
+                creationflags=flags,
+                start_new_session=sys.platform != "win32",  # its own group: Stop ends the children too
+            )
+        except (OSError, ValueError) as exc:  # ValueError: a NUL or a bad argument the OS cannot take
+            self.proc = None
+            self.lines.append(str(exc))
+            self.code = -1
+            self.ended = time.time()
+            return
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _pump(self) -> None:
+        if self.proc is None or self.proc.stdout is None:
+            return
+        for raw in iter(self.proc.stdout.readline, b""):
+            self.queue.put(("line", decode_line(raw).rstrip("\r\n")))
+            self._notify()
+        self.proc.wait()
+        self.proc.stdout.close()
+        self.queue.put(("end", self.proc.returncode))
+        self._notify()
+
+    def _notify(self) -> None:
+        if self.notify is not None:
+            self.notify()
+
+    def stop(self) -> None:
+        """End the run with everything it started: `cmd /c x.bat` or `powershell -File` run
+        the script in a child, and ending the shell alone leaves the script running."""
+        if self.proc is None or self.proc.poll() is not None:
+            return
+        if sys.platform == "win32":
+            try:
+                subprocess.run(  # noqa: S603 — taskkill, on our own child
+                    ["taskkill", "/T", "/F", "/PID", str(self.proc.pid)],  # noqa: S607 — a system tool
+                    capture_output=True, timeout=10, creationflags=CREATE_NO_WINDOW,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+        else:
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            except OSError:
+                pass
+        if self.proc.poll() is None:
+            self.proc.terminate()
+
+    @property
+    def running(self) -> bool:
+        return self.ended is None
+
+    def duration(self) -> float:
+        return (self.ended or time.time()) - self.started
+
+    def take(self) -> list[tuple[str, Any]]:
+        """What the thread put since the last take: lines, and the end once. A line is
+        kept in `lines`; the end sets `code` and `ended`."""
+        out: list[tuple[str, Any]] = []
+        while True:
+            try:
+                kind, value = self.queue.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "line":
+                self.lines.append(value)
+            else:
+                self.code, self.ended = value, time.time()
+            out.append((kind, value))
+        return out
+
+
+def cmd_quote(arg: str) -> str:
+    """One argument for a cmd.exe line: in double quotes when it has a space or a character
+    cmd would act on (& | < > ^ ( )); a quote inside is doubled, as cmd and the C runtime read it."""
+    if arg and not any(c in arg for c in ' 	"&|<>^()'):
+        return arg
+    return '"' + arg.replace('"', '""') + '"'
+
+
+def console_command(plan: Any) -> str:
+    """The cmd line that runs the plan in a console that stays open. Handed to Popen as a
+    string: a list goes through list2cmdline, whose \\" escapes cmd does not read, and a
+    quoted path or argument arrived cut into pieces. /S takes the outer quotes off as they are."""
+    line = plan.shell or " ".join(cmd_quote(a) for a in plan.argv)
+    return f'cmd /S /K "{line}"'
+
+
+def mac_command_script(plan: Any) -> str:
+    """The .command file Terminal runs for the plan: it removes itself, goes to the folder,
+    runs the line, then leaves a shell in the window, as `cmd /K` does on Windows."""
+    lines = ["#!/bin/sh", 'rm -f "$0"']
+    if plan.cwd:
+        lines.append(f"cd {shlex.quote(plan.cwd)} || exit 1")
+    lines += [plan.shell or shlex.join(plan.argv), 'exec "${SHELL:-/bin/zsh}" -l']
+    return "\n".join(lines) + "\n"
+
+
+def open_in_console(plan: Any) -> bool:
+    """Start the plan in a separate console window that stays open after the script ends.
+    False — no terminal program was found (Linux without one); the caller runs it quietly."""
+    cwd = plan.cwd or None
+    if sys.platform == "win32":
+        subprocess.Popen(console_command(plan), cwd=cwd, creationflags=CREATE_NEW_CONSOLE)  # noqa: S603
+        return True
+    if MAC:
+        fd, path = tempfile.mkstemp(prefix="daykeeper-", suffix=".command")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(mac_command_script(plan))
+        os.chmod(path, 0o700)
+        # Terminal opens a .command file by itself: no Apple events, so no Automation
+        # permission to ask for (osascript waited on one forever, with nothing on screen)
+        done = subprocess.run(["open", "-a", "Terminal", path], capture_output=True, timeout=30)  # noqa: S603,S607
+        if done.returncode != 0:
+            os.unlink(path)
+            return False
+        return True
+    term = shutil.which("x-terminal-emulator") or shutil.which("gnome-terminal") or shutil.which("xterm")
+    if not term:
+        return False
+    line = plan.shell or shlex.join(plan.argv)
+    subprocess.Popen([term, "-e", "sh", "-c", line + "; exec sh"], cwd=cwd)  # noqa: S603
+    return True

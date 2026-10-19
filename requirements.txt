@@ -1,0 +1,6 @@
+# What the app needs to run from source; the same versions as the build (requirements-build.txt).
+cryptography==50.0.2
+# the window: QtCore/QtGui/QtWidgets only, not the full PySide6 (Addons, WebEngine). The two
+# versions must always be the same.
+PySide6-Essentials==6.12.0
+shiboken6==6.12.0

@@ -1,0 +1,14 @@
+# Weekly pull requests for new versions: the pinned GitHub Actions and the Python
+# packages. A pull request only proposes; nothing is merged by itself.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

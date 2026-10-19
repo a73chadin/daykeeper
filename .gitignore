@@ -1,0 +1,19 @@
+.venv/
+.venv-qt/
+build/
+dist/
+*.spec
+!packaging/*.spec
+__pycache__/
+*.pyc
+*.pkv
+*.jsonl
+.pytest_cache/
+# working notes stay out of the repository
+AUDIT*.md
+PLAN*.md
+REPORT*.md
+*_REPORT.md
+*-REPORT.md
+PROGRESS*.md
+TODO*.md

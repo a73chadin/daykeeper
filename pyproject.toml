@@ -1,0 +1,102 @@
+# The app's version and what it runs on (daykeeper/__init__.py holds the same version; a
+# test keeps the two and requirements.txt in step). It is run from source or built with
+# PyInstaller (build.bat / build.sh), not installed as a package.
+[project]
+name = "daykeeper"
+version = "2.0.0"
+description = "Passwords, bookmarks, a work journal, notes, routines and a calendar in one encrypted file"
+requires-python = ">=3.13,<3.16"
+dependencies = [
+    "cryptography==50.0.2",
+    "PySide6-Essentials==6.12.0",
+    "shiboken6==6.12.0",
+]
+
+# Lint and type checks: `ruff check .` and `mypy`; CI runs both before the tests.
+# Install with: python -m pip install -r requirements-dev.txt
+
+[tool.ruff]
+target-version = "py313"
+extend-exclude = ["build", "dist", ".venv", ".venv-qt"]
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, bugbear, bandit (security), pyupgrade, simplify
+select = ["E", "W", "F", "B", "S", "UP", "SIM"]
+ignore = [
+    "E501",    # long lines are the house style: one statement, one line; the formatter is not used
+    "SIM105",  # try/except/pass reads plainer here than contextlib.suppress
+    "SIM108",  # a ternary is not always clearer than an if
+]
+
+[tool.ruff.lint.per-file-ignores]
+# tests: asserts, made-up passwords and temp paths, a Python child process
+"tests/**" = ["S101", "S105", "S106", "S107", "S108", "S603"]
+# tools/screenshots.py: a sample vault password, asserts, the system screencapture
+"tools/**" = ["S101", "S105", "S603", "S607"]
+
+[tool.mypy]
+python_version = "3.13"
+# checked as on Windows wherever it runs: win32.py calls ctypes.windll, which a Linux
+# runner's ctypes does not have (the calls are skipped off Windows at run time)
+platform = "win32"
+# the pure modules (the models, the formats, the parsers) and the Qt window, every module
+# of the package; tools/ and tests/ are checked by ruff and by running them.
+files = [
+    "daykeeper/vault.py",
+    "daykeeper/security.py",
+    "daykeeper/journal.py",
+    "daykeeper/journal_layout.py",
+    "daykeeper/hookrules.py",
+    "daykeeper/gitlab.py",
+    "daykeeper/siteicon.py",
+    "daykeeper/routines.py",
+    "daykeeper/cli.py",
+    "daykeeper/session.py",
+    "daykeeper/notes.py",
+    "daykeeper/bookmarks.py",
+    "daykeeper/envimport.py",
+    "daykeeper/errlog.py",
+    "daykeeper/settings.py",
+    "daykeeper/undo.py",
+    "daykeeper/revisions.py",
+    "daykeeper/export.py",
+    "daykeeper/markdown.py",
+    "daykeeper/pngimage.py",
+    "daykeeper/i18n.py",
+    "daykeeper/autostart.py",
+    "daykeeper/runner.py",
+    "daykeeper/claudecode.py",
+    "daykeeper/win32.py",
+    "daykeeper/clipboard.py",
+    "daykeeper/jobs.py",
+    "daykeeper/layout.py",
+    "daykeeper/tabs.py",
+    "daykeeper/fieldicons.py",
+    # the Qt window: PySide6 ships its type stubs (without it installed they are Any)
+    "daykeeper/qt",
+    "main.py",
+    "cli_main.py",
+    "inbox.py",
+    "daykeeper/boot.py",
+    "daykeeper/palette.py",
+    "daykeeper/expiry.py",
+    "daykeeper/totp.py",
+    "daykeeper/hub.py",
+    "daykeeper/integrations.py",
+    "daykeeper/stats.py",
+    "daykeeper/templates.py",
+    "daykeeper/jira.py",
+    "daykeeper/importers.py",
+    "daykeeper/calendar_model.py",
+    "daykeeper/digest.py",
+    "daykeeper/quick.py",
+    "daykeeper/hotkey.py",
+    "daykeeper/cliphistory.py",
+    "daykeeper/assistants.py",
+    "daykeeper/assistant_runs.py",
+    "daykeeper/mr_preview.py",
+    "daykeeper/calls.py",
+]
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true

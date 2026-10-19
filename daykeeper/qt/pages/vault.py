@@ -1,0 +1,1322 @@
+"""The “Passwords” tab of the Qt window: the list of entries on the left, the card with its
+fields on the right. The list is a model over the vault (10 000 entries without a widget
+per row).
+
+Secrets stay sealed in the vault until they are needed: a secret field shows its value
+only while it is revealed (the eye) or being typed into, and an emptied field keeps
+nothing (`SecretEdit.wipe`). The guard over the tab hides the list and the card and
+empties them; the guard screen is the only thing the keyboard can reach then."""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Callable
+
+from PySide6.QtCore import QAbstractListModel, QEvent, QModelIndex, QObject, QPersistentModelIndex, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPaintEvent, QPen
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QListView,
+    QMenu,
+    QPlainTextEdit,
+    QSplitter,
+    QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ... import totp
+from ...bookmarks import entry_login, entry_secret
+from ...expiry import CERT_FIELD
+from ...clipboard import CLEAR_SEC
+from ...fieldicons import summary as field_summary
+from ...i18n import _, fmt_time, hotkeys
+from ...security import GUARD_PIN
+from ...vault import DEFAULT_KIND, KINDS, MAIN_GROUP, Entry, Field, generate_password, main_group_label
+from .. import icons, theme
+from ..dialogs.base import ask_text, ask_yes_no, button, label, show_info, show_warning
+from ..dialogs.expiry import ToneText, badge_text, card_expiries, expires_text
+from ..timers import Debounce, Ticker
+from ..widgets.common import GlyphView, add_action, divider, fill_menu, icon_button, more_button, popup_below, scroll_area, search_field, section, set_glyph, transient
+from ..widgets.flow import flow_host
+from ..widgets.secret_edit import SecretEdit
+from .base import TabPage
+from ..errors import guard_events
+
+# Preset fields for the “+ Add field” button: (menu label key, field name key, secret?).
+FIELD_PRESETS: list[tuple[str, str, bool]] = [
+    ("🎟  Token", "token", True),
+    ("👤  Login", "login", False),
+    ("🔑  Password", "password", True),
+    ("🌐  Site / URL", "site", False),
+    ("✉  Mail", "mail", False),
+    ("📞  Phone", "phone", False),
+    ("📅  Valid until", "valid until", False),
+    ("🔢  PIN code", "PIN", True),
+    ("🛡  2FA key", "2FA key", True),
+    ("🗝  Private key", "private key", True),
+]
+MAX_ROW_ICONS = 4  # more fields than this show as “+N”; the tooltip lists them all
+ENTRY_KIND_ICONS = {"login": "🔑", "token": "🎟", "key": "🗝", "card": "💳", "note": "📝", "other": "📦"}
+SEARCH_SETTLE_MS = 150  # the list is filtered once the typing pauses this long
+MASK = "••••••••"
+ROW_HEIGHT = theme.px(32)  # px of a list row
+LEFT_ICON = theme.px(16)  # px, the kind of an entry before its name
+RIGHT_ICON = theme.px(14)  # px, the filled fields at the right edge
+RIGHT_ROLE = Qt.ItemDataRole.UserRole + 1
+ENTRY_ROLE = Qt.ItemDataRole.UserRole + 2
+BADGE_ROLE = Qt.ItemDataRole.UserRole + 3  # days left of the soonest expiry of the entry, or None
+BADGE_ICON = theme.px(12)  # px, the clock on a list badge
+TOTP_TICK_MS = 1000
+TOTP_RING = theme.px(16)  # px, the countdown ring beside a 2FA code
+TOTP_SOON = 5  # s; the ring turns red for the last seconds of a code
+
+
+def kind_icon(kind: str) -> str:
+    return ENTRY_KIND_ICONS.get(kind, ENTRY_KIND_ICONS[DEFAULT_KIND])
+
+
+@guard_events
+class EntryModel(QAbstractListModel):
+    """The entries the list shows, in their order. The right cell: icons of the filled
+    fields, the kind while none is, or the list a search hit lives in."""
+
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(parent)
+        self.rows: list[Entry] = []
+        self.query = ""
+        self.group = MAIN_GROUP
+        self.badges: dict[str, int] = {}  # ExpiryWatch.badges
+
+    def set_rows(self, rows: list[Entry], query: str, group: str) -> None:
+        self.beginResetModel()
+        self.rows, self.query, self.group = rows, query, group
+        self.endResetModel()
+
+    def rowCount(self, parent: QModelIndex | QPersistentModelIndex | None = None) -> int:
+        return 0 if parent is not None and parent.isValid() else len(self.rows)
+
+    def row_of(self, entry: Entry) -> int:
+        return next((i for i, e in enumerate(self.rows) if e.id == entry.id), -1)
+
+    def changed(self, entry: Entry) -> None:
+        row = self.row_of(entry)
+        if row >= 0:
+            idx = self.index(row)
+            self.dataChanged.emit(idx, idx)
+
+    def right_text(self, e: Entry) -> str:
+        if self.query.strip() and e.group != self.group:  # found in another list — say which
+            return _("in “{group}”").format(group=e.group or main_group_label())
+        glyphs = field_summary(e.fields)[0].split()  # what is inside, not the kind it started as
+        if not glyphs:
+            return e.kind_label
+        return " ".join(glyphs[:MAX_ROW_ICONS]) + (f" +{len(glyphs) - MAX_ROW_ICONS}" if len(glyphs) > MAX_ROW_ICONS else "")
+
+    def data(self, index: QModelIndex | QPersistentModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not 0 <= index.row() < len(self.rows):
+            return None
+        e = self.rows[index.row()]
+        if role == Qt.ItemDataRole.DisplayRole:
+            return f"{kind_icon(e.kind)}  {e.name or _('(untitled)')}"
+        if role == RIGHT_ROLE:
+            return self.right_text(e)
+        if role == ENTRY_ROLE:
+            return e
+        if role == BADGE_ROLE:
+            return self.badges.get(e.id)
+        if role == Qt.ItemDataRole.ToolTipRole:
+            names = field_summary(e.fields)[1]
+            tip = (e.name or _("(untitled)")) + "\n" + e.kind_label + "\n" + (_("Fields: {names}").format(names=", ".join(names)) if names else _("No filled fields"))
+            days = self.badges.get(e.id)
+            return tip + ("\n" + expires_text(days) if days is not None else "")
+        return None
+
+
+def right_parts(text: str) -> list[str]:
+    """The right cell as icons and words: "🔑 👤 +2" → ["🔑", "👤", "+2"]; a text with no
+    glyph (the kind, the list a hit lives in) is one part."""
+    words = text.split()
+    if words and all(icons.name_of(w) or w.startswith("+") for w in words):
+        return words
+    return [text] if text else []
+
+
+def parts_width(fm: QFontMetrics, parts: list[str]) -> list[int]:
+    return [RIGHT_ICON if icons.name_of(p) else fm.horizontalAdvance(p) for p in parts]
+
+
+@guard_events
+class EntryDelegate(QStyledItemDelegate):
+    """A row: the icon and the name on the left, the right cell muted at the right edge."""
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex) -> None:
+        t = theme.current()
+        painter.save()
+        r = option.rect
+        state = option.state
+        if state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(r, QColor(t.ACCENT_SOFT))
+        elif state & QStyle.StateFlag.State_MouseOver:
+            painter.fillRect(r, QColor(t.HOVER))
+        fm = option.fontMetrics
+        edge = r.right() - 6
+        days = index.data(BADGE_ROLE)
+        if days is not None:
+            edge = self.paint_badge(painter, r, edge, int(days), fm) - 6
+        parts = right_parts(str(index.data(RIGHT_ROLE) or ""))
+        right_w = min(sum(parts_width(fm, parts)) + 12, (edge - r.left()) // 2)
+        x = edge
+        for part, w in zip(reversed(parts), reversed(parts_width(fm, parts)), strict=True):
+            if x - w < edge - right_w:
+                break
+            if icons.name_of(part):
+                icons.paint(painter, part, QRect(x - w, r.top(), w, r.height()), t.MUTED, size=RIGHT_ICON)
+            else:
+                painter.setPen(QColor(t.MUTED))
+                painter.drawText(QRect(x - w - 12, r.top(), w + 12, r.height()), int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight), fm.elidedText(part, Qt.TextElideMode.ElideRight, right_w))
+            x -= w + 4
+        glyph, name = icons.split(str(index.data() or ""))
+        left = r.left() + 8
+        if glyph is not None:
+            icons.paint(painter, glyph, QRect(left, r.top(), LEFT_ICON, r.height()), t.MUTED, size=LEFT_ICON)
+            left += LEFT_ICON + 8
+        painter.setPen(QColor(t.TEXT))
+        name_rect = QRect(left, r.top(), edge - right_w - 6 - left, r.height())
+        painter.drawText(name_rect, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), fm.elidedText(name, Qt.TextElideMode.ElideRight, name_rect.width()))
+        painter.restore()
+
+    def paint_badge(self, painter: QPainter, r: QRect, right: int, days: int, fm: QFontMetrics) -> int:
+        """The expiry badge at the right edge of a row: the clock and "3 d" on a tinted
+        pill, orange within the warning window, red once expired. Answers its left edge."""
+        t = theme.current()
+        colour = t.DANGER if days < 0 else t.LINK
+        text = badge_text(days)
+        w = BADGE_ICON + 4 + fm.horizontalAdvance(text) + 12
+        h = min(r.height() - 8, fm.height() + 4)
+        pill = QRectF(right - w, r.center().y() - h / 2 + 1, w, h)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(theme.blend(colour, t.SIDEBAR, 0.16)))
+        painter.drawRoundedRect(pill, h / 2, h / 2)
+        icons.paint(painter, "clock", QRectF(pill.left() + 6, pill.top(), BADGE_ICON, pill.height()), colour, size=BADGE_ICON)
+        painter.setPen(QColor(colour))
+        painter.drawText(QRectF(pill.left() + 6 + BADGE_ICON + 4, pill.top(), fm.horizontalAdvance(text) + 2, pill.height()), int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), text)
+        return int(pill.left())
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex) -> QSize:
+        return QSize(200, ROW_HEIGHT)
+
+
+@guard_events
+class CountdownRing(QWidget):
+    """The seconds a 2FA code has left, as a ring that empties; red for the last seconds."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.left, self.period = 0, 30
+        self.setFixedSize(TOTP_RING, TOTP_RING)
+
+    def set(self, left: int, period: int) -> None:
+        self.left, self.period = left, max(1, period)
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        t = theme.current()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        width = max(2.0, TOTP_RING / 7)
+        box = QRectF(self.rect()).adjusted(width / 2 + 1, width / 2 + 1, -width / 2 - 1, -width / 2 - 1)
+        p.setPen(QPen(QColor(t.BORDER), width))
+        p.drawEllipse(box)
+        pen = QPen(QColor(t.DANGER if self.left <= TOTP_SOON else t.ACCENT), width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawArc(box, 90 * 16, round(360 * 16 * self.left / self.period))
+        p.end()
+
+
+def spaced_code(code: str) -> str:
+    """"123456" -> "123 456": the code in two halves, easier to read off."""
+    half = len(code) // 2
+    return f"{code[:half]} {code[half:]}"
+
+
+class TotpView(QWidget):
+    """Under a 2FA key field: the ring, the live code with its seconds, Copy code."""
+
+    def __init__(self, row: FieldRow):
+        super().__init__(row)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        self.ring = CountdownRing(self)
+        self.code = label("", "", self)
+        self.code.setFont(theme.font(13, bold=True, mono=True))
+        self.copy = button(_("Copy code"), "small", self)
+        self.copy.setToolTip(_("To the clipboard; cleared after {n} s").format(n=CLEAR_SEC))
+        self.copy.clicked.connect(row.copy_code)
+        self.invalid = label(_("Not a 2FA key: paste the otpauth:// link or the key the service gave"), "muted", self)
+        self.invalid.setWordWrap(True)
+        self.invalid.hide()
+        lay.addWidget(self.ring)
+        lay.addWidget(self.code)
+        lay.addWidget(self.copy)
+        lay.addWidget(self.invalid, 1)
+        lay.addStretch(1)
+
+    def show_code(self, code: str, left: int, period: int) -> None:
+        self.code.setText(_("{code} · {n} s").format(code=spaced_code(code), n=left))
+        self.ring.set(left, period)
+        for w in (self.ring, self.code, self.copy):
+            w.show()
+        self.invalid.hide()
+
+    def show_invalid(self) -> None:
+        self.code.setText("")
+        for w in (self.ring, self.code, self.copy):
+            w.hide()
+        self.invalid.show()
+
+
+@guard_events
+class FieldRow(QWidget):
+    """One "name — value" line of the card: the name, the value, show, copy, generate,
+    secret, delete. A secret value is put into the field only while it is revealed or
+    being typed into; otherwise the field is empty and shows a mask."""
+
+    changed = Signal()
+
+    def __init__(self, page: VaultPage, f: Field, parent: QWidget):
+        super().__init__(parent)
+        self.page, self.f = page, f
+        self.revealed = False
+        self.key = QLineEdit(f.key, self)
+        self.key.setProperty("role", "key")
+        self.key.setFixedWidth(self.key.fontMetrics().averageCharWidth() * 15 + 20)
+        self.value = SecretEdit(self)
+        self.value.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu if not f.secret else Qt.ContextMenuPolicy.NoContextMenu)
+        self.value.installEventFilter(self)
+        self.eye = icon_button("👁", _("Show / hide value"), self.toggle_reveal, self)
+        tip = _("To the clipboard; cleared after {n} s").format(n=CLEAR_SEC) + ("\n" + hotkeys(_("Ctrl+Shift+C copies the password of the entry, Ctrl+B its login")) if f.secret else "")
+        self.copy = button(_("Copy"), "small", self)
+        self.copy.setToolTip(tip)
+        self.copy.clicked.connect(self.copy_value)
+        self.gen = icon_button("🎲", _("Generate password"), self.generate, self)
+        self.lock = icon_button("🔒", _("Secret: show as dots, do not search by value"), None, self)
+        self.lock.setCheckable(True)
+        self.lock.setChecked(f.secret)
+        self.lock.toggled.connect(self.set_secret)
+        self.rm = icon_button("✕", _("Delete field"), lambda: page.remove_field(f), self)
+        self.key.textEdited.connect(self._key_edited)
+        self.value.textEdited.connect(self._value_edited)
+        # under the value: "Expires in 3 days" of a date field, the live code of a 2FA key
+        self.extra = QWidget(self)
+        extra = QVBoxLayout(self.extra)
+        extra.setContentsMargins(0, 0, 0, 2)
+        extra.setSpacing(2)
+        self.expiry_line = ToneText(self.extra)
+        self.expiry_line.hide()
+        extra.addWidget(self.expiry_line)
+        self.totp_view: TotpView | None = None
+        self.extra.hide()
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 2, 0, 2)
+        self.grid.setHorizontalSpacing(4)
+        self.grid.setVerticalSpacing(2)
+        self.compact: bool | None = None
+        self._copy_wide = 0  # the one-line "Copy" button, see one_line_width
+        self.set_compact(False)
+        self.show_value()
+
+    # ---- layout: one line, or the name above the value on a narrow card
+
+    def set_compact(self, compact: bool) -> None:
+        if compact == self.compact:
+            return
+        self.compact = compact
+        for w in (self.key, self.value, self.eye, self.copy, self.gen, self.lock, self.rm, self.extra):
+            self.grid.removeWidget(w)
+        line = 1 if compact else 0
+        self.grid.addWidget(self.extra, line + 1, 0 if compact else 1, 1, 6)
+        if compact:
+            self.grid.addWidget(self.key, 0, 0, 1, 6, Qt.AlignmentFlag.AlignLeft)
+            self.grid.addWidget(self.value, 1, 0)
+            self.copy.setText("")
+            self.copy.setIcon(icons.button("copy"))
+        else:
+            self.grid.addWidget(self.key, 0, 0)
+            self.grid.addWidget(self.value, 0, 1)
+            self.copy.setIcon(QIcon())
+            self.copy.setText(_("Copy"))
+        col = 1 if compact else 2
+        for i, b in enumerate((self.eye, self.copy, self.gen, self.lock, self.rm)):
+            self.grid.addWidget(b, line, col + i)
+        self.grid.setColumnStretch(0, 1 if compact else 0)
+        self.grid.setColumnStretch(1, 0 if compact else 1)
+
+    def one_line_width(self) -> int:
+        """The width the row takes on one line with a usable value field — the same in both
+        layouts: measured with the wide "Copy" even while the narrow icon shows, else the
+        narrow button would call for one line, the wide one for two, and so on without end
+        (at a text size of 125 % that ping-pong overflowed the stack)."""
+        if not self.compact:
+            self._copy_wide = max(self._copy_wide, self.copy.sizeHint().width())
+        widths = [self.key.width(), self.value.fontMetrics().averageCharWidth() * 18, self._copy_wide]
+        widths += [w.sizeHint().width() for w in (self.eye, self.gen, self.lock, self.rm)]
+        return sum(widths) + 4 * 7
+
+    # ---- the value
+
+    def show_value(self) -> None:
+        """What the field holds now: the value, or nothing and a mask (see the class)."""
+        f = self.f
+        if f.unreadable:
+            self.value.wipe()
+            self.value.setPlaceholderText(_("(unreadable value: restore a copy from Settings → Data)"))
+            self.value.set_shown(True)
+            return
+        if not f.secret:
+            self.value.set_shown(True)
+            self.value.setPlaceholderText("")
+            if self.value.text() != f.value:
+                self.value.setText(f.value)
+            return
+        self.value.set_shown(self.revealed)
+        set_glyph(self.eye, "🙈" if self.revealed else "👁")
+        if self.revealed or self.value.hasFocus():
+            if self.value.text() != f.value:
+                self.value.setText(f.value)
+            self.value.setPlaceholderText("")
+        else:
+            self.value.wipe()
+            self.value.setPlaceholderText(MASK if f.filled else "")
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if obj is self.value and self.f.secret and event.type() in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+            self.show_value()  # typed into: the value comes in; left: it goes again
+        return False
+
+    def toggle_reveal(self) -> None:
+        if not self.f.secret:
+            return
+        self.revealed = not self.revealed
+        self.show_value()
+
+    def set_secret(self, on: bool) -> None:
+        self.f.secret = on
+        self.revealed = False
+        self.value.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu if on else Qt.ContextMenuPolicy.DefaultContextMenu)
+        self.show_value()
+        self.changed.emit()
+        self.page.field_shape_changed()
+
+    def generate(self) -> None:
+        self.f.value = generate_password()
+        self.show_value()
+        self.changed.emit()
+        self.page.field_shape_changed()
+
+    def copy_value(self) -> None:
+        self.page.shell.copy_to_clipboard(self.f.value)
+
+    # ---- under the value: the expiry line and the 2FA code
+
+    def set_expiry(self, days_left: int | None, warn: int) -> None:
+        if days_left is None:
+            self.expiry_line.hide()
+        else:
+            self.expiry_line.set(expires_text(days_left), days_left, warn)
+            self.expiry_line.show()
+        self._fit_extra()
+
+    def is_totp(self) -> bool:
+        """A filled "2FA key" field (named so in any language); nothing is unsealed to know."""
+        return totp.is_totp_field(self.f.key) and self.f.filled and not self.f.unreadable
+
+    def sync_totp(self) -> None:
+        """The code view comes with a 2FA key field and goes when the field is renamed or emptied."""
+        on = self.is_totp()
+        if on and self.totp_view is None:
+            self.totp_view = TotpView(self)
+            layout = self.extra.layout()
+            if layout is not None:
+                layout.addWidget(self.totp_view)
+        if self.totp_view is not None:
+            self.totp_view.setVisible(on)
+        self._fit_extra()
+
+    def _fit_extra(self) -> None:
+        self.extra.setVisible(not self.expiry_line.isHidden() or (self.totp_view is not None and not self.totp_view.isHidden()))
+
+    def current_code(self, now: float) -> tuple[str, int, int] | None:
+        """(code, seconds left, period) for the moment `now`: the key is unsealed for this
+        call only and never kept; None — the value is no 2FA key."""
+        t = totp.parse(self.f.value)
+        if t is None:
+            return None
+        return totp.code(t, now), totp.seconds_left(t, now), t.period
+
+    def tick(self, now: float) -> None:
+        if self.totp_view is None:
+            return
+        shown = self.current_code(now)
+        if shown is None:
+            self.totp_view.show_invalid()
+        else:
+            self.totp_view.show_code(*shown)
+
+    def copy_code(self) -> None:
+        shown = self.current_code(self.page.clock())
+        if shown is not None:
+            self.page.shell.copy_to_clipboard(shown[0], secret=True)
+
+    def _key_edited(self, text: str) -> None:
+        self.f.key = text
+        self.changed.emit()
+        self.page.field_shape_changed()
+
+    def _value_edited(self, text: str) -> None:
+        self.f.value = text
+        self.changed.emit()
+        self.page.field_shape_changed()
+
+    def wipe(self) -> None:
+        self.value.wipe()
+
+
+@guard_events
+class FieldsBox(QWidget):
+    """The field rows; each goes to two lines when one line no longer fits the card."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.rows: list[FieldRow] = []
+        self.col = QVBoxLayout(self)
+        self.col.setContentsMargins(0, 0, 0, 0)
+        self.col.setSpacing(2)
+        self._compact = False
+
+    def clear(self) -> None:
+        for row in self.rows:
+            row.wipe()
+            self.col.removeWidget(row)
+            row.hide()
+            row.deleteLater()
+        self.rows = []
+
+    def add(self, row: FieldRow) -> None:
+        self.rows.append(row)
+        self.col.addWidget(row)
+        row.set_compact(self._compact)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.fit()
+
+    def fit(self) -> None:
+        if not self.rows:
+            return
+        compact = self.width() < max(r.one_line_width() for r in self.rows)
+        if compact != self._compact:
+            self._compact = compact
+            for r in self.rows:
+                r.set_compact(compact)
+
+
+class GuardScreen(QWidget):
+    """Over the Passwords tab while it is locked: the code field and Unlock. Everything
+    under it is hidden and disabled, so Tab, Ctrl+F or Space reach nothing there."""
+
+    def __init__(self, page: VaultPage):
+        super().__init__(page)
+        self.page = page
+        self.setObjectName("Guard")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        box = QVBoxLayout()
+        box.setSpacing(4)
+        icon = GlyphView("padlock", 44, self)
+        self.title = label(_("Passwords are locked"), "title", self)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.hint = label("", "subtitle", self)
+        self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.code = SecretEdit(self)
+        self.code.setProperty("role", "big")
+        self.code.setFixedWidth(self.code.fontMetrics().averageCharWidth() * 28 + 24)
+        self.code.returnPressed.connect(self.submit)
+        self.error = label("", "error", self)
+        self.error.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        go = button(_("Unlock"), "primary", self)
+        go.clicked.connect(self.submit)
+        box.addWidget(icon, 0, Qt.AlignmentFlag.AlignHCenter)
+        box.addSpacing(6)
+        for w in (self.title, self.hint):
+            box.addWidget(w)
+        box.addSpacing(10)
+        box.addWidget(self.code, 0, Qt.AlignmentFlag.AlignHCenter)
+        box.addWidget(self.error)
+        box.addSpacing(6)
+        box.addWidget(go)
+        outer = QVBoxLayout(self)
+        outer.addStretch(4)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addLayout(box)
+        row.addStretch(1)
+        outer.addLayout(row)
+        outer.addStretch(6)
+
+    def prepare(self) -> None:
+        vault = self.page.vault
+        pin = vault is not None and vault.security.vault_guard == GUARD_PIN
+        self.hint.setText(_("Enter the PIN code to see them") if pin else _("Enter the master password to see them"))
+        self.error.setText("")
+        self.code.wipe()
+
+    def submit(self) -> None:
+        security = self.page.shell.security
+        result = security.limited(security.code_matches, _("Wrong code"))(self.code.text())
+        self.code.wipe()
+        if result is True:
+            security.unlock_secrets()
+        else:
+            self.error.setText(str(result))
+
+
+@guard_events
+class VaultPage(TabPage):
+    """The Passwords tab. `current` is the entry on the card, `group` the list shown."""
+
+    name = "vault"
+
+    def build(self) -> None:
+        self.current: Entry | None = None
+        self.group: str = MAIN_GROUP
+        self._loading = False
+        self._guarded_id: str | None = None
+        self.guarded = False
+        self.clock: Callable[[], float] = time.time  # the 2FA codes' time; tests freeze it
+        self._totp_ticker = Ticker(self, TOTP_TICK_MS, self.tick_totp)
+        self.stack = QStackedWidget(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self.stack)
+        self.content = QWidget(self.stack)
+        self.guard_screen = GuardScreen(self)
+        self.stack.addWidget(self.content)
+        self.stack.addWidget(self.guard_screen)
+        self._build_content(self.content)
+
+    # ---- building
+
+    def _build_content(self, host: QWidget) -> None:
+        splitter = QSplitter(Qt.Orientation.Horizontal, host)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(1)
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(splitter)
+        left = QFrame(splitter)
+        left.setObjectName("Sidebar")
+        left.setMinimumWidth(280)
+        right = QFrame(splitter)
+        right.setObjectName("Card")
+        right.setMinimumWidth(360)
+        splitter.addWidget(left)
+        splitter.addWidget(right)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([400, 10_000])
+        self.splitter = splitter
+        self._build_sidebar(left)
+        self._build_card(right)
+        self._refresh_group_widgets()
+
+    def _build_sidebar(self, left: QFrame) -> None:
+        col = QVBoxLayout(left)
+        col.setContentsMargins(16, 16, 12, 12)
+        col.setSpacing(10)
+        row = QHBoxLayout()
+        row.addWidget(label(_("List"), "muted", left))
+        self.group_box = QComboBox(left)
+        self.group_box.activated.connect(self._on_group_select)
+        row.addWidget(self.group_box, 1)
+        more = more_button([(_("New list…"), self.new_group), (_("Rename list…"), self.rename_group), (_("Delete list"), self.delete_group)], _("Create, rename or delete a list"), left)
+        row.addWidget(more)
+        col.addLayout(row)
+
+        self.search = QLineEdit(left)
+        search_field(self.search, hotkeys(_("🔍  Search  (Ctrl+F)")))
+        self.search.setClearButtonEnabled(True)
+        self.search.setToolTip(hotkeys(_("Enter — the first hit onto the card, ↓ — into the list, Esc — clear.\nCtrl+Shift+C copies the password of the entry on the card, Ctrl+B its login.")))
+        self.search.textChanged.connect(self._on_search_change)
+        self.search.installEventFilter(self)
+        self._search_later = Debounce(self, SEARCH_SETTLE_MS, self.refresh_list)
+        col.addWidget(self.search)
+
+        self.model = EntryModel(self)
+        self.model.badges = self.shell.expiry.badges
+        self.list = QListView(left)
+        self.list.setObjectName("EntryList")
+        self.list.setModel(self.model)
+        self.list.setItemDelegate(EntryDelegate(self.list))
+        self.list.setUniformItemSizes(True)
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.list.setMouseTracking(True)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._show_context_menu)
+        self.list.selectionModel().currentChanged.connect(self._on_current_changed)
+        self.list.installEventFilter(self)
+        col.addWidget(self.list, 1)
+        self.empty_hint = label("", "muted", left)
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_hint.setWordWrap(True)
+        self.empty_hint.hide()
+        col.addWidget(self.empty_hint)
+
+        host, flow = flow_host(left, 6)
+        self.new_btn = button(_("+ New entry") + "   ▾", "primary", host)
+        new_menu = QMenu(self.new_btn)
+        for kind, text in KINDS.items():
+            add_action(new_menu, f"{ENTRY_KIND_ICONS[kind]}  {_(text)}").triggered.connect(lambda _c=False, k=kind: self.new_entry(k))
+        self.new_btn.clicked.connect(lambda: popup_below(new_menu, self.new_btn))
+        flow.addWidget(self.new_btn)
+        tools = QWidget(host)
+        tl = QHBoxLayout(tools)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(2)
+        tl.addWidget(icon_button("▲", _("Up  (Alt+↑)"), lambda: self.move_entry(-1), tools))
+        tl.addWidget(icon_button("▼", _("Down  (Alt+↓)"), lambda: self.move_entry(+1), tools))
+        tl.addWidget(icon_button("🗑", _("Delete"), self.delete_entry, tools, role="danger"))
+        flow.addWidget(tools)
+        col.addWidget(host)
+        self._refresh_group_widgets()
+
+    def _build_card(self, right: QFrame) -> None:
+        self.card_stack = QStackedWidget(right)
+        lay = QVBoxLayout(right)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.card_stack)
+        self.placeholder = label(_("Pick an entry on the left\nor create a new one"), "placeholder", right)
+        self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        area, card, col = scroll_area(right)
+        self.card_area = area
+        self.card_stack.addWidget(self.placeholder)
+        self.card_stack.addWidget(area)
+
+        self.name_edit = QLineEdit(card)
+        self.name_edit.setProperty("role", "name")
+        self.name_edit.textEdited.connect(self._on_name_change)
+        col.addWidget(self.name_edit)
+        col.addSpacing(10)
+        meta_host, meta = flow_host(card, 12)
+        kind = QWidget(meta_host)
+        kl = QHBoxLayout(kind)
+        kl.setContentsMargins(0, 0, 0, 0)
+        kl.addWidget(label(_("Kind"), "muted", kind))
+        self.kind_box = QComboBox(kind)
+        for k, v in KINDS.items():
+            self.kind_box.addItem(icons.plain(ENTRY_KIND_ICONS[k]), _(v), k)
+        self.kind_box.activated.connect(self._on_kind_change)
+        kl.addWidget(self.kind_box)
+        meta.addWidget(kind)
+        grp = QWidget(meta_host)
+        gl = QHBoxLayout(grp)
+        gl.setContentsMargins(0, 0, 0, 0)
+        gl.addWidget(label(_("List"), "muted", grp))
+        self.entry_group_box = QComboBox(grp)
+        self.entry_group_box.setMinimumContentsLength(14)
+        self.entry_group_box.activated.connect(self._on_entry_group_change)
+        gl.addWidget(self.entry_group_box)
+        meta.addWidget(grp)
+        self.updated_label = label("", "muted", meta_host)
+        meta.addWidget(self.updated_label)
+        col.addWidget(meta_host)
+        col.addSpacing(18)
+        col.addWidget(divider(card))
+        col.addSpacing(14)
+        col.addWidget(section(_("FIELDS"), card))
+        col.addSpacing(6)
+        self.fields = FieldsBox(card)
+        col.addWidget(self.fields)
+        col.addSpacing(6)
+        self.add_field_btn = button(_("+ Add field  ▾"), "link", card)
+        self.add_field_btn.setToolTip(_("Token, login, password, site… or a custom field"))
+        self.add_field_btn.clicked.connect(self._show_add_field_menu)
+        col.addWidget(self.add_field_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        col.addSpacing(18)
+        col.addWidget(section(_("NOTE"), card))
+        col.addSpacing(6)
+        self.note = QPlainTextEdit(card)
+        self.note.setFixedHeight(self.note.fontMetrics().lineSpacing() * 8 + 20)
+        self.note.textChanged.connect(self._on_note_change)
+        col.addWidget(self.note)
+        col.addStretch(1)
+
+    # ---- keys of the search and the list
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() != QEvent.Type.KeyPress:
+            return False
+        key = event.key()  # type: ignore[attr-defined]
+        if obj is self.search:
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._search_pick_first()
+                return True
+            if key == Qt.Key.Key_Down:
+                self._focus_list()
+                return True
+            if key == Qt.Key.Key_Escape:
+                self._clear_search()
+                return True
+        elif obj is self.list:
+            if key == Qt.Key.Key_Delete:
+                self.delete_entry()
+                return True
+            if key == Qt.Key.Key_Escape:
+                self._clear_search()
+                return True
+        return False
+
+    # ---- what the window asks for
+
+    def open_first(self) -> None:
+        self.refresh_list()
+        self._load_entry(self.model.rows[0] if self.model.rows else None)
+        if self.current is not None:
+            self._select_in_list(self.current)
+        if self.vault is not None:
+            self.shell.set_status(_("Entries: {n}").format(n=len(self.vault.entries)))
+
+    def new_item(self) -> None:
+        self.shell.security.require_secrets(self.new_entry)
+
+    def focus_search(self) -> None:
+        self.shell.security.require_secrets(self.search.setFocus)
+
+    def cancel_jobs(self) -> None:
+        self._search_later.cancel()
+        self._totp_ticker.stop()
+        self.fields.clear()
+
+    def on_shown(self) -> None:
+        self.sync_totp()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.sync_totp()
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self.sync_totp()
+
+    # ---- expiry and 2FA on the list and the card
+
+    def expiry_changed(self) -> None:
+        """The watch looked again (dialogs/expiry.py): the badges of the list, the lines of the card."""
+        self.model.badges = self.shell.expiry.badges
+        self.list.viewport().update()
+        self._card_extras()
+
+    def field_shape_changed(self) -> None:
+        """A field of the card was renamed, typed into, made secret: its line and its code follow."""
+        if not self._loading:
+            self._card_extras()
+
+    def _card_extras(self) -> None:
+        rows = self.fields.rows
+        if self.current is None or not rows:
+            self.sync_totp()
+            return
+        warn = self.shell.expiry.warn()
+        days: dict[int, int] = {}
+        for x in card_expiries(self.current, self.shell.expiry.today()):
+            row = next((i for i, r in enumerate(rows) if i not in days and not r.f.secret and r.f.filled and (r.f.key.strip() or CERT_FIELD) == x.field), None)
+            if row is not None:
+                days[row] = x.days_left
+        for i, r in enumerate(rows):
+            r.set_expiry(days.get(i), warn)
+            r.sync_totp()
+        self.sync_totp()
+
+    def totp_live(self) -> bool:
+        """Codes run only while somebody can see them: an entry on the card, the tab shown,
+        the window not minimized, the guard open."""
+        return (
+            self.current is not None
+            and not self.guarded
+            and self.shell.mode == self.name
+            and self.isVisible()
+            and not self.window().isMinimized()
+            and self.shell.security.secrets_open()
+        )
+
+    def _totp_rows(self) -> list[FieldRow]:
+        return [r for r in self.fields.rows if r.totp_view is not None and r.is_totp()]
+
+    def sync_totp(self) -> None:
+        if self._totp_rows() and self.totp_live():
+            self.tick_totp()
+            self._totp_ticker.start()
+        else:
+            self._totp_ticker.stop()
+
+    def tick_totp(self) -> bool:
+        """Once a second: every 2FA code of the card; False stops the ticks."""
+        rows = self._totp_rows()
+        if not rows or not self.totp_live():
+            return False
+        now = self.clock()
+        for r in rows:
+            r.tick(now)
+        return True
+
+    def guard(self, on: bool) -> None:
+        """Behind the guard: the list and the card are emptied, hidden and disabled; the
+        guard screen takes the keyboard. `guard(False)` reopens the entry that was shown."""
+        if on:
+            self._guarded_id = self.current.id if self.current is not None else None
+            self._search_later.cancel()
+            self._totp_ticker.stop()
+            self.search.setText("")
+            self._load_entry(None)
+            self.model.set_rows([], "", self.group)
+            self.guarded = True
+            self.content.setEnabled(False)
+            self.guard_screen.prepare()
+            self.stack.setCurrentWidget(self.guard_screen)
+            if self.shell.mode == self.name:
+                self.guard_screen.code.setFocus()
+            return
+        self.guarded = False
+        self.content.setEnabled(True)
+        self.stack.setCurrentWidget(self.content)
+        self.guard_screen.code.wipe()
+        self.refresh_list()
+        again = self.vault.entry_by_id(self._guarded_id or "") if self.vault is not None else None
+        if again is not None:
+            self._load_entry(again)
+            self._select_in_list(again)
+        else:
+            self.open_first()
+
+    def focus_guard(self) -> None:
+        if self.guarded:
+            self.guard_screen.code.setFocus()
+
+    def select_entry(self, entry: Entry) -> None:
+        """Show `entry` on the card, switching to its list first (a bookmark tile's link)."""
+        if self.guarded:
+            self.shell.security.require_secrets(lambda: self.select_entry(entry))
+            return
+        if entry.group != self.group:
+            self.group = entry.group
+            self._refresh_group_widgets()
+        self.search.setText("")
+        self.refresh_list()
+        self._load_entry(entry)
+        self._select_in_list(entry)
+
+    def reload(self) -> None:
+        """The vault changed under the tab (an import): the lists, the list and the card follow."""
+        self._refresh_group_widgets()
+        self.refresh_list()
+        if self.current is not None:
+            self._load_entry(self.current)
+        self.edited()
+
+    def entry_changed_outside(self, entry: Entry) -> None:
+        """An entry changed under the tab (the GitLab token's last day): its row, and the
+        card when it shows it."""
+        if self.guarded:
+            return  # the card and the list are empty behind the guard; they are filled again on the way back
+        self.model.changed(entry)
+        if self.current is entry:
+            self._load_entry(entry)
+
+    def edited(self, touch_entry: bool = True) -> None:
+        if touch_entry and self.current is not None:
+            self.current.updated = time.time()
+            self.updated_label.setText(_("Updated {stamp}").format(stamp=fmt_time(self.current.updated)))
+            if self._tied_to_bookmark(self.current):
+                self.shell.session.touch("bookmarks")
+        self.shell.mark_dirty("vault")
+
+    def copy_field(self, kind: str) -> None:
+        """Ctrl+Shift+C / Ctrl+B: the password or the login of the entry on the card."""
+        if self.current is None or self.guarded:
+            return
+        value = entry_login(self.current) if kind == "login" else entry_secret(self.current)
+        if not value:
+            self.shell.set_status(_("This entry has no login") if kind == "login" else _("This entry has no password"))
+            return
+        self.shell.copy_to_clipboard(value, secret=kind != "login")
+
+    # ---- the list
+
+    def _on_search_change(self, text: str) -> None:
+        if text.strip():
+            self._search_later.touch()
+        else:
+            self._search_later.cancel()
+            self.refresh_list()
+
+    def _filter_now(self) -> None:
+        if self._search_later.pending:
+            self._search_later.flush()
+        else:
+            self.refresh_list()
+
+    def _search_pick_first(self) -> None:
+        self._filter_now()
+        if self.model.rows:
+            self._load_entry(self.model.rows[0])
+            self._select_in_list(self.model.rows[0])
+
+    def _focus_list(self) -> None:
+        self._filter_now()
+        rows = self.model.rows
+        if not rows:
+            return
+        if self.current is None or all(e.id != self.current.id for e in rows):
+            self._load_entry(rows[0])
+        if self.current is not None:
+            self._select_in_list(self.current)
+        self.list.setFocus()
+
+    def _clear_search(self) -> None:
+        if self.search.text():
+            self.search.setText("")
+        self.search.setFocus()
+
+    def refresh_list(self) -> None:
+        if self.vault is None or self.guarded:
+            return
+        query = self.search.text()
+        self.model.set_rows(self.vault.search(query, self.group), query, self.group)
+        if self.current is not None:
+            self._select_in_list(self.current)
+        if self.model.rows:
+            self.empty_hint.hide()
+        else:
+            self.empty_hint.setText(_("Nothing found") if query.strip() else _("This list is empty.\nCreate an entry or move one here."))
+            self.empty_hint.show()
+
+    def _select_in_list(self, entry: Entry) -> None:
+        row = self.model.row_of(entry)
+        if row < 0:
+            return
+        self._loading = True
+        try:
+            idx = self.model.index(row)
+            self.list.setCurrentIndex(idx)
+            self.list.scrollTo(idx)
+        finally:
+            self._loading = False
+
+    def _on_current_changed(self, current: QModelIndex, _previous: QModelIndex) -> None:
+        if self._loading or not current.isValid():
+            return
+        entry = current.data(ENTRY_ROLE)
+        if entry is None:
+            return
+        if self.current is None or entry.id != self.current.id:
+            self._load_entry(entry)
+        if entry.group != self.group:  # a search hit from another list was picked — switch to that list
+            self.group = entry.group
+            self._refresh_group_widgets()
+
+    # ---- entries
+
+    def new_entry(self, kind: str = DEFAULT_KIND) -> None:
+        if self.vault is None:
+            return
+        entry = self.vault.add_entry(kind=kind, group=self.group)
+        self.current = entry
+        self.search.setText("")
+        self.refresh_list()
+        self._load_entry(entry)
+        self._select_in_list(entry)
+        self.name_edit.setFocus()
+        self.name_edit.selectAll()
+        self.edited()
+
+    def delete_entry(self) -> None:
+        if self.vault is None or self.current is None or self.guarded:
+            return
+        entry = self.current
+        if not ask_yes_no(self.shell, _("Delete “{name}”?").format(name=entry.name)):
+            return
+        if self.vault is None or self.guarded or self.current is not entry:
+            return  # locked, guarded or moved on while the question was open: nothing is deleted
+        if self._tied_to_bookmark(self.current):
+            self.shell.session.touch("bookmarks")
+        self.vault.remove_entry(self.current)
+        self.current = None
+        self.refresh_list()
+        first = self.model.rows[0] if self.model.rows else None
+        self._load_entry(first)
+        if first is not None:
+            self._select_in_list(first)
+        self.edited()
+
+    def move_entry(self, delta: int) -> None:
+        if self.vault is None or self.current is None or self.guarded:
+            return
+        if self.search.text().strip():
+            self.shell.set_status(_("Order changes in the list, not in search results"))
+            return
+        if self.vault.move_entry(self.current, delta):
+            self.refresh_list()
+            self.edited()
+
+    # ---- the card
+
+    def _load_entry(self, entry: Entry | None) -> None:
+        if entry is not None and self.guarded:
+            entry = None  # behind the guard the card shows nothing, whoever asks
+        self._totp_ticker.stop()  # the card's codes start again with its new rows (_card_extras)
+        self._loading = True
+        try:
+            self.current = entry
+            self.fields.clear()
+            self.note.setPlainText("")
+            if entry is None:
+                self.name_edit.setText("")
+                self.card_stack.setCurrentWidget(self.placeholder)
+                return
+            self.card_stack.setCurrentWidget(self.card_area)
+            self.name_edit.setText(entry.name)
+            self.kind_box.setCurrentIndex(max(0, list(KINDS).index(entry.kind) if entry.kind in KINDS else 0))
+            self.entry_group_box.setCurrentText(entry.group or main_group_label())
+            self.updated_label.setText(_("Updated {stamp}").format(stamp=fmt_time(entry.updated)))
+            self.note.setPlainText(entry.note)
+            for f in entry.fields:
+                self._add_row(f)
+            self.card_area.verticalScrollBar().setValue(0)
+        finally:
+            self._loading = False
+        self._card_extras()
+
+    def _add_row(self, f: Field) -> FieldRow:
+        row = FieldRow(self, f, self.fields)
+        row.changed.connect(self._field_changed)
+        self.fields.add(row)
+        return row
+
+    def _field_changed(self) -> None:
+        if self._loading or self.current is None:
+            return
+        self.edited()
+        self.model.changed(self.current)
+
+    def _show_add_field_menu(self) -> None:
+        if self.current is None:
+            return
+        menu = transient(QMenu(self.add_field_btn))
+        for text, key, secret in FIELD_PRESETS:
+            add_action(menu, _(text)).triggered.connect(lambda _c=False, k=key, s=secret: self.add_field(_(k), s))
+        menu.addSeparator()
+        menu.addAction(_("Custom field…")).triggered.connect(lambda: self.add_field())
+        popup_below(menu, self.add_field_btn)
+
+    def add_field(self, key: str = "", secret: bool = False) -> None:
+        if self.current is None:
+            return
+        f = Field(key, secret=secret)
+        self.current.fields.append(f)
+        row = self._add_row(f)
+        self.edited()
+        self._card_extras()
+        (row.value if key else row.key).setFocus()
+        bar = self.card_area.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def remove_field(self, f: Field) -> None:
+        if self.current is None:
+            return
+        self.current.fields = [x for x in self.current.fields if x is not f]
+        self._load_entry(self.current)
+        self.edited()
+        self.model.changed(self.current)
+
+    def _on_name_change(self, text: str) -> None:
+        if self._loading or self.current is None:
+            return
+        self.current.name = text
+        self._name_row(self.current)
+        self.edited()
+
+    def _name_row(self, e: Entry) -> None:
+        """Only the entry's row says its new name; a search may no longer find it, then the list is filtered again."""
+        if self.search.text().strip() or self.model.row_of(e) < 0:
+            self.refresh_list()
+            return
+        self.model.changed(e)
+
+    def _on_kind_change(self, index: int) -> None:
+        if self._loading or self.current is None or index < 0:
+            return
+        self.current.kind = list(KINDS)[index]
+        self._name_row(self.current)
+        self.edited()
+
+    def _on_entry_group_change(self, _index: int) -> None:
+        if self._loading or self.current is None:
+            return
+        self.set_entry_group(self.current, self._group_from_label(self.entry_group_box.currentText()))
+
+    def set_entry_group(self, entry: Entry, group: str) -> None:
+        if self.vault is None or entry.group == group:
+            return
+        self.vault.set_group(entry, group)
+        self.group = group
+        self._refresh_group_widgets()
+        self.search.setText("")
+        self.refresh_list()
+        self._select_in_list(entry)
+        self.edited()
+        self.shell.set_status(_("“{name}” → list “{group}”").format(name=entry.name, group=group or main_group_label()))
+
+    def _on_note_change(self) -> None:
+        if self._loading or self.current is None:
+            return
+        self.current.note = self.note.toPlainText()
+        self.edited()
+
+    # ---- lists
+
+    def _group_values(self) -> list[str]:
+        return [main_group_label()] + list(self.vault.groups) if self.vault else [main_group_label()]
+
+    def _group_from_label(self, text: str) -> str:
+        return MAIN_GROUP if text == main_group_label() else text
+
+    def _refresh_group_widgets(self) -> None:
+        values = self._group_values()
+        for box in (self.group_box, getattr(self, "entry_group_box", None)):
+            if box is None:
+                continue
+            box.blockSignals(True)
+            box.clear()
+            box.addItems(values)
+            box.blockSignals(False)
+        self.group_box.setCurrentText(self.group or main_group_label())
+        if self.current is not None:
+            self.entry_group_box.setCurrentText(self.current.group or main_group_label())
+
+    def _on_group_select(self, _index: int = 0) -> None:
+        self.group = self._group_from_label(self.group_box.currentText())
+        self.search.setText("")
+        self.current = None
+        self.refresh_list()
+        first = self.model.rows[0] if self.model.rows else None
+        self._load_entry(first)
+        if first is not None:
+            self._select_in_list(first)
+
+    def new_group(self) -> None:
+        if self.vault is None:
+            return
+        name = ask_text(self.shell, _("New list"), _("List name"))
+        if name is None:
+            return
+        try:
+            self.group = self.vault.add_group(name)
+        except ValueError as exc:
+            show_warning(self.shell, str(exc))
+            return
+        self._refresh_group_widgets()
+        self._on_group_select()
+        self.edited(touch_entry=False)
+
+    def rename_group(self) -> None:
+        if self.vault is None:
+            return
+        if self.group == MAIN_GROUP:
+            show_info(self.shell, _("The main list cannot be renamed."))
+            return
+        name = ask_text(self.shell, _("Rename list"), _("New name"), initial=self.group)
+        if name is None:
+            return
+        try:
+            self.group = self.vault.rename_group(self.group, name)
+        except ValueError as exc:
+            show_warning(self.shell, str(exc))
+            return
+        self._refresh_group_widgets()
+        self.edited(touch_entry=False)
+
+    def delete_group(self) -> None:
+        if self.vault is None:
+            return
+        if self.group == MAIN_GROUP:
+            show_info(self.shell, _("The main list cannot be deleted."))
+            return
+        count = len(self.vault.search("", self.group))
+        if not ask_yes_no(self.shell, _("Delete list “{name}”?\nEntries in it: {n}. They will not be lost, they move to the main list.").format(name=self.group, n=count)):
+            return
+        self.vault.backup_now()  # a deleted list cannot be undone after a lock: a copy first
+        self.vault.remove_group(self.group)
+        self.group = MAIN_GROUP
+        self._refresh_group_widgets()
+        self._on_group_select()
+        self.edited(touch_entry=False)
+
+    # ---- the context menu of a row
+
+    def _show_context_menu(self, pos) -> None:
+        idx = self.list.indexAt(pos)
+        if not idx.isValid():
+            return
+        self.list.setCurrentIndex(idx)
+        menu = transient(QMenu(self.list))
+        fill_menu(menu, [(_("Up\tAlt+↑"), lambda: self.move_entry(-1)), (_("Down\tAlt+↓"), lambda: self.move_entry(+1)), None])
+        move_to = menu.addMenu(_("Move to list"))
+        for text in self._group_values():
+            group = self._group_from_label(text)
+            act = move_to.addAction(text)
+            act.setEnabled(self.current is None or group != self.current.group)
+            act.triggered.connect(lambda _c=False, g=group: self._move_current_to(g))
+        move_to.addSeparator()
+        move_to.addAction(_("New list…")).triggered.connect(self._move_to_new_group)
+        menu.addAction(_("Make a bookmark…")).triggered.connect(self._make_bookmark)
+        menu.addSeparator()
+        menu.addAction(_("Delete\tDelete")).triggered.connect(self.delete_entry)
+        menu.popup(self.list.viewport().mapToGlobal(pos))
+        self.context_menu = menu  # tests reach it here
+
+    def _move_current_to(self, group: str) -> None:
+        if self.current is not None:
+            self.set_entry_group(self.current, group)
+
+    def _make_bookmark(self) -> None:
+        if self.current is not None:
+            self.shell.page("bookmarks").from_entry(self.current)
+
+    def _move_to_new_group(self) -> None:
+        entry = self.current
+        if self.vault is None or entry is None:
+            return
+        name = ask_text(self.shell, _("New list"), _("List name"))
+        if name is None:
+            return
+        try:
+            group = self.vault.add_group(name)
+        except ValueError as exc:
+            show_warning(self.shell, str(exc))
+            return
+        self._refresh_group_widgets()
+        self.set_entry_group(entry, group)
+
+    def _tied_to_bookmark(self, entry: Entry) -> bool:
+        return self.vault is not None and any(b.entry_id == entry.id for b in self.vault.bookmarks.items)
+
