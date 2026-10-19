@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build the app from packaging/daykeeper.spec: on macOS the bundle dist/Daykeeper.app
-# (zipped to dist/Daykeeper-macos.zip), elsewhere the folder dist/Daykeeper/; then print
+# (zipped to dist/Daykeeper-macos.zip, and dist/Daykeeper-<version>.dmg), elsewhere the folder dist/Daykeeper/; then print
 # the SHA256. The spec puts the version and the minimum system (macOS 14) into Info.plist.
 set -e
 cd "$(dirname "$0")"
@@ -14,8 +14,14 @@ if [ "$(uname)" = "Darwin" ]; then
     # an ad-hoc signature over the whole bundle (no certificate: see README)
     codesign --force --deep --sign - dist/Daykeeper.app
     ditto -c -k --sequesterRsrc --keepParent dist/Daykeeper.app dist/Daykeeper-macos.zip
+    # the disk image: the app and a link to Applications to drag it onto
+    version=$(.venv/bin/python -c "import daykeeper; print(daykeeper.__version__)")
+    rm -rf build/dmg && mkdir -p build/dmg
+    ditto dist/Daykeeper.app build/dmg/Daykeeper.app
+    ln -s /Applications build/dmg/Applications
+    hdiutil create -volname Daykeeper -srcfolder build/dmg -ov -format UDZO "dist/Daykeeper-$version.dmg"
     echo "Done: $(pwd)/dist/Daykeeper.app"
-    shasum -a 256 dist/Daykeeper-macos.zip
+    shasum -a 256 dist/Daykeeper-macos.zip "dist/Daykeeper-$version.dmg"
 else
     .venv/bin/python packaging/check_size.py dist/Daykeeper 95
     echo "Done: $(pwd)/dist/Daykeeper"

@@ -138,5 +138,68 @@ class CiFilesTest(unittest.TestCase):
         self.assertRegex(text, r"(?m)^hypothesis==\d")
 
 
+class InstallerAndSigningTest(unittest.TestCase):
+    """2.1: the Windows installer, the macOS disk image and the signed checksums the app's
+    update trusts. Read as text, as above: iscc, hdiutil and the secret exist only in CI."""
+
+    def test_the_installer_is_per_user_and_leaves_the_data_alone(self):
+        from daykeeper import autostart, update
+
+        iss = _read("packaging/daykeeper.iss")
+        for needle in ("PrivilegesRequired=lowest", r"DefaultDirName={localappdata}\Programs\Daykeeper", "CloseApplications=yes", "RestartApplications=no",
+                       r'Type: filesandordirs; Name: "{app}\_internal"', "{autoprograms}", "{autodesktop}", "UninstalledAll=", r"AppData\Roaming"):
+            self.assertIn(needle, iss, needle)
+        self.assertNotIn("PrivilegesRequired=admin", iss)
+        self.assertNotRegex(iss, r"(?i)\{(userappdata|appdata)\}", "neither the setup nor the uninstaller touches the data folder")
+        self.assertNotIn("[UninstallDelete]", iss)
+        # the start with the system is the app's own Run value, and the uninstaller takes it
+        # away only when it starts this copy
+        self.assertIn(f'Subkey: "{autostart.RUN_KEY}"', iss)
+        self.assertIn(f'ValueName: "{autostart.NAME}"', iss)
+        self.assertIn(f"RegDeleteValue(HKCU, RunKey, '{autostart.NAME}')", iss)
+        self.assertIn(r"Pos(Lowercase(ExpandConstant('{app}\Daykeeper.exe'))", iss)
+        # the update's silent run starts the new copy; its file name is the one the app asks for
+        self.assertIn("{param:LAUNCH|0}", iss)
+        self.assertIn("/LAUNCH=1", update.setup_command(Path("s.exe")))
+        self.assertIn("OutputBaseFilename=Daykeeper-{#AppVersion}-setup", iss)
+        self.assertEqual(update.setup_name("2.1.0"), "Daykeeper-2.1.0-setup.exe")
+        self.assertTrue((ROOT / "packaging" / "daykeeper.iss").read_bytes().startswith(b"\xef\xbb\xbf"), "UTF-8 with a BOM: Inno Setup reads the Russian texts right")
+
+    def test_the_release_carries_the_installers_and_the_signed_sums(self):
+        workflow = _read(".github/workflows/build.yml")
+        windows = workflow[workflow.index("  windows:"):workflow.index("  macos:")]
+        for needle in (r"packaging\daykeeper.iss", "choco install innosetup", "if (-not $iscc)", "dist/Daykeeper-*-setup.exe", '-ne "v$version"'):
+            self.assertIn(needle, windows, needle)
+        macos = workflow[workflow.index("  macos:"):workflow.index("  release:")]
+        for needle in ("hdiutil create", "ln -s /Applications", "dist/Daykeeper-*.dmg"):
+            self.assertIn(needle, macos, needle)
+        release = workflow[workflow.index("  release:"):]
+        for name in ("Daykeeper-*-setup.exe", "Daykeeper-*.dmg", "SHA256SUMS.txt.sig"):
+            self.assertIn(f"out/{name}", release, name)
+        self.assertIn("sha256sum Daykeeper-win64.zip Daykeeper-*-setup.exe Daykeeper-macos.zip Daykeeper-*.dmg > SHA256SUMS.txt", release)
+
+    def test_the_signing_key_reaches_only_the_signing_step(self):
+        workflow = _read(".github/workflows/build.yml")
+        self.assertEqual(workflow.count("secrets.DAYKEEPER_SIGNING_KEY"), 1)
+        steps = re.split(r"\n      - ", workflow)
+        signing = [st for st in steps if "secrets.DAYKEEPER_SIGNING_KEY" in st]
+        self.assertEqual(len(signing), 1)
+        step = signing[0]
+        self.assertIn("DAYKEEPER_SIGNING_KEY: ${{ secrets.DAYKEEPER_SIGNING_KEY }}", step)
+        self.assertIn("run: python tools/sign_release.py out/SHA256SUMS.txt", step)
+        code = "\n".join(line for line in step.splitlines() if not line.strip().startswith("#"))
+        self.assertNotRegex(code, r"echo|cat |printenv|set -x|tee ", "nothing in the step can print the key")
+        self.assertNotIn("pip install", code, "the tool is installed in a step of its own, without the key")
+        self.assertLess(workflow.index("python tools/sign_release.py"), workflow.index("softprops/action-gh-release@"))
+
+    def test_the_signing_tool_has_the_build_set_pins(self):
+        sign = _read("packaging/requirements-sign.txt")
+        build = _read("requirements-build.txt")
+        blocks = re.findall(r"(?ms)^(\w[\w-]*==\S+.*?)(?=^\S|\Z)", sign)
+        self.assertEqual(sorted(b.split("==")[0] for b in blocks), ["cffi", "cryptography", "pycparser"])
+        for block in blocks:
+            self.assertIn(block.strip(), build, block.split(" ")[0])
+
+
 if __name__ == "__main__":
     unittest.main()

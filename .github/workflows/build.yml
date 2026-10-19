@@ -67,10 +67,33 @@ jobs:
           python -c "import shutil; shutil.make_archive('dist/Daykeeper-win64', 'zip', 'dist', 'Daykeeper')"
           if ($LASTEXITCODE) { exit 1 }
 
+      - name: Installer
+        # Daykeeper-<version>-setup.exe from the same folder (packaging/daykeeper.iss: per
+        # user, no administrator rights). Inno Setup comes with the runner image; choco
+        # installs it only when it is not there. A tag must name the version the package
+        # carries: the app's update looks for the setup by the tag's version.
+        run: |
+          $version = python -c "import daykeeper; print(daykeeper.__version__)"
+          if ($LASTEXITCODE) { exit 1 }
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$version") { Write-Error "the tag ${{ github.ref_name }} does not match the version $version in daykeeper/__init__.py"; exit 1 }
+          $numeric = $version.Split('-')[0]
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = (Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE) { exit 1 }
+            $iscc = (Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          & $iscc /Q "/DAppVersion=$version" "/DAppNumericVersion=$numeric" "/DSourceDir=$PWD\dist\Daykeeper" "/O$PWD\dist" packaging\daykeeper.iss
+          if ($LASTEXITCODE) { exit 1 }
+          if (-not (Test-Path "dist\Daykeeper-$version-setup.exe")) { exit 1 }
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Daykeeper-windows
-          path: dist/Daykeeper-win64.zip
+          path: |
+            dist/Daykeeper-win64.zip
+            dist/Daykeeper-*-setup.exe
 
   macos:
     needs: lint
@@ -103,10 +126,21 @@ jobs:
           codesign --force --deep --sign - dist/Daykeeper.app
           ditto -c -k --sequesterRsrc --keepParent dist/Daykeeper.app dist/Daykeeper-macos.zip
 
+      - name: Disk image
+        # Daykeeper-<version>.dmg: the app and a link to Applications to drag it onto
+        run: |
+          version=$(python -c "import daykeeper; print(daykeeper.__version__)")
+          mkdir dmg
+          ditto dist/Daykeeper.app dmg/Daykeeper.app
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname Daykeeper -srcfolder dmg -ov -format UDZO "dist/Daykeeper-$version.dmg"
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Daykeeper-macos
-          path: dist/Daykeeper-macos.zip
+          path: |
+            dist/Daykeeper-macos.zip
+            dist/Daykeeper-*.dmg
 
   release:
     needs: [windows, macos]
@@ -123,13 +157,30 @@ jobs:
         with:
           path: artifacts
 
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+
       - name: Checksums
         run: |
           mkdir out
-          cp artifacts/Daykeeper-windows/Daykeeper-win64.zip artifacts/Daykeeper-macos/Daykeeper-macos.zip out/
+          cp artifacts/Daykeeper-windows/Daykeeper-win64.zip artifacts/Daykeeper-windows/Daykeeper-*-setup.exe out/
+          cp artifacts/Daykeeper-macos/Daykeeper-macos.zip artifacts/Daykeeper-macos/Daykeeper-*.dmg out/
           cd out
-          sha256sum Daykeeper-win64.zip Daykeeper-macos.zip > SHA256SUMS.txt
+          sha256sum Daykeeper-win64.zip Daykeeper-*-setup.exe Daykeeper-macos.zip Daykeeper-*.dmg > SHA256SUMS.txt
           cat SHA256SUMS.txt
+
+      - name: Install the signing tool
+        run: python -m pip install --require-hashes -r packaging/requirements-sign.txt
+
+      - name: Sign the checksums
+        # SHA256SUMS.txt.sig: the Ed25519 signature the app's update checks before it trusts
+        # the list (daykeeper/update.py). The key reaches the script only through this
+        # environment variable; the script never prints or writes it, fails when it is
+        # missing, and checks the signature with the public key the app carries.
+        env:
+          DAYKEEPER_SIGNING_KEY: ${{ secrets.DAYKEEPER_SIGNING_KEY }}
+        run: python tools/sign_release.py out/SHA256SUMS.txt
 
       - name: Provenance
         # a signed statement of which workflow run, commit and inputs built each file; check a
@@ -139,14 +190,19 @@ jobs:
         with:
           subject-path: |
             out/Daykeeper-win64.zip
+            out/Daykeeper-*-setup.exe
             out/Daykeeper-macos.zip
+            out/Daykeeper-*.dmg
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             out/Daykeeper-win64.zip
+            out/Daykeeper-*-setup.exe
             out/Daykeeper-macos.zip
+            out/Daykeeper-*.dmg
             out/SHA256SUMS.txt
+            out/SHA256SUMS.txt.sig
           body_path: CHANGELOG.md
           generate_release_notes: true
           # a tag with a suffix (v1.2.0-beta.1, -rc.1) is a pre-release: marked so on GitHub and

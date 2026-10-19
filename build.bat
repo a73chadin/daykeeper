@@ -18,6 +18,12 @@ rem The app replaces an installed helper when this stamp differs.
 .venv\Scripts\python packaging\check_size.py dist\Daykeeper 95 || exit /b 1
 rem the zip holds the Daykeeper folder itself, as the 1.x folder build did
 .venv\Scripts\python -c "import shutil; shutil.make_archive(r'dist\Daykeeper-win64', 'zip', 'dist', 'Daykeeper')" || exit /b 1
+rem The installer, when Inno Setup's compiler is on PATH (iscc; CI installs it): dist\Daykeeper-<version>-setup.exe
+where iscc >nul 2>nul && (
+    for /f %%v in ('.venv\Scripts\python -c "import daykeeper; print(daykeeper.__version__)"') do (
+        for /f "delims=-" %%n in ("%%v") do iscc /Q "/DAppVersion=%%v" "/DAppNumericVersion=%%n" "/DSourceDir=%~dp0dist\Daykeeper" "/O%~dp0dist" packaging\daykeeper.iss || exit /b 1
+    )
+) || echo No iscc on PATH: the installer is not built.
 echo.
 echo Done: %~dp0dist\Daykeeper\Daykeeper.exe and %~dp0dist\Daykeeper-win64.zip
 certutil -hashfile dist\Daykeeper-win64.zip SHA256 | findstr /v "hashfile"
