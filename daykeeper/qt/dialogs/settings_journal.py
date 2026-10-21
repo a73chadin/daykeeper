@@ -9,7 +9,7 @@ from functools import partial
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QButtonGroup, QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLineEdit, QRadioButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QButtonGroup, QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLineEdit, QPlainTextEdit, QRadioButton, QVBoxLayout, QWidget
 
 from ... import journal_layout as jl
 from ...i18n import _
@@ -182,9 +182,9 @@ class JournalSection(QWidget):
             return
         if confirm and not ask_yes_no(self.win, _("Replace the columns and kinds with the “{name}” layout?").format(name=_(jl.PRESETS[pid]))):
             return
-        mr_short = self.layout_.mr_short
+        mr_short, themes = self.layout_.mr_short, self.layout_.themes
         self.layout_ = jl.preset(pid)
-        self.layout_.mr_short = mr_short
+        self.layout_.mr_short, self.layout_.themes = mr_short, themes
         self.fresh.clear()
         self.paint()
 
@@ -220,6 +220,8 @@ class JournalSection(QWidget):
         self.mr.setChecked(self.layout_.mr_short)
         self.plans.setChecked(self.layout_.show_plans)
         self.other.setChecked(self.layout_.show_other)
+        if jl.clean_themes(self.themes.toPlainText()) != self.layout_.themes:
+            self.themes.setPlainText("\n".join(self.layout_.themes))
 
     def move_item(self, items: list, index: int, step: int) -> None:
         j = index + step
@@ -267,6 +269,15 @@ class JournalSection(QWidget):
             g.addWidget(box)
             boxes.append(box)
         self.mr, self.plans, self.other = boxes
+        g.addWidget(label(_("Note themes"), "section", s.inner))
+        hint = label(_("One per line. A note that names one goes into line 1 as that theme, once a day and in this order; other notes go there as written. The command “inbox.py themes” lists them for a session."), "muted", s.inner)
+        hint.setWordWrap(True)
+        g.addWidget(hint)
+        self.themes = QPlainTextEdit(s.inner)
+        self.themes.setPlaceholderText(_("Empty — every note goes into line 1 as written"))
+        self.themes.setFixedHeight(self.themes.fontMetrics().lineSpacing() * 8 + 16)
+        self.themes.textChanged.connect(lambda: setattr(self.layout_, "themes", jl.clean_themes(self.themes.toPlainText())))
+        g.addWidget(self.themes)
 
     # ---- save
 

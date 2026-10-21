@@ -52,6 +52,7 @@ class ReportTest(LinksCase):
         expected = "\n".join(
             [
                 "1. RFT, reviewed MRs",
+                "",
                 "Tested successfully:",
                 URL + "APP-2812",
                 URL + "WEB-629",
@@ -70,7 +71,7 @@ class ReportTest(LinksCase):
 
     def test_report_empty_day(self):
         text = build_report(Day("2026-10-13"))
-        self.assertTrue(text.startswith("1.\nTested successfully:\n\nTest failed:\n\nNew bug:\n\n2.\n\n3. None"))
+        self.assertTrue(text.startswith("1.\n\nTested successfully:\n\nTest failed:\n\nNew bug:\n\n2.\n\n3. None"))
 
     def test_day_add_and_roundtrip(self):
         day = Day("2026-10-13")
@@ -119,7 +120,7 @@ class ActivityTest(LinksCase):
         lines = text.splitlines()
         self.assertEqual(lines[0], "1. tested tasks, reviewed MRs, new manual/autotests, weekly cleanup")
         self.assertEqual(lines[1:5], ["MR reviews: !42", "MRs opened: product!17", "MRs merged: !44", "New tests: APP-101"])
-        self.assertEqual(lines[5], "Tested successfully:")
+        self.assertEqual(lines[6], "Tested successfully:")
         day.summary = "own line"
         self.assertTrue(build_report(day).startswith("1. own line\n"))
         self.assertEqual(Day("2026-10-13", columns={"bugs": ["APP-9"]}).auto_summary(), "bugs filed")

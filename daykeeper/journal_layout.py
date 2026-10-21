@@ -79,6 +79,7 @@ class Layout:
     mr_short: bool = True  # in the report: !42 / repo!17, or the full link
     show_plans: bool = True  # "2." in the editor and the report
     show_other: bool = True  # "3." in the editor and the report
+    themes: list[str] = field(default_factory=list)  # what a note may say; line 1 lists them in this order
 
     # ---- lookups
 
@@ -139,6 +140,7 @@ class Layout:
             "mr_short": self.mr_short,
             "show_plans": self.show_plans,
             "show_other": self.show_other,
+            "themes": list(self.themes),
         }}
 
     @classmethod
@@ -172,8 +174,51 @@ class Layout:
             mr_short=bool(raw.get("mr_short", True)),
             show_plans=bool(raw.get("show_plans", True)),
             show_other=bool(raw.get("show_other", True)),
+            themes=clean_themes(raw.get("themes")),
         )
         return layout if layout.columns or layout.kinds else preset("qa")
+
+
+# ---- themes of the notes
+
+
+def _theme_key(text: str) -> str:
+    return " ".join(text.split()).strip(" .;,").casefold()
+
+
+def clean_themes(raw) -> list[str]:
+    """The themes as settings.json or the settings field gives them: texts, trimmed, without
+    blanks and repeats (whatever their case)."""
+    if isinstance(raw, str):
+        raw = raw.splitlines()
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in raw if isinstance(raw, list) else []:
+        text = " ".join(str(value).split()) if value is not None else ""
+        if text and _theme_key(text) not in seen:
+            seen.add(_theme_key(text))
+            out.append(text)
+    return out
+
+
+def theme_of(text: str, themes: list[str]) -> str | None:
+    """The theme a note names (case, spaces and a final full stop do not matter), or None."""
+    key = _theme_key(text)
+    return next((t for t in themes if _theme_key(t) == key), None)
+
+
+def themed(notes: list[str], themes: list[str]) -> list[str]:
+    """Notes for line 1: the themes they name, once each and in the order of the list, then
+    the notes that name none, as they were written (each once). No themes — the notes as
+    they are, each once."""
+    named = {theme_of(n, themes) for n in notes} - {None}
+    out = [t for t in themes if t in named]
+    seen = {_theme_key(t) for t in out}
+    for n in notes:
+        if theme_of(n, themes) is None and _theme_key(n) not in seen:
+            seen.add(_theme_key(n))
+            out.append(n)
+    return out
 
 
 # The tester's words of the first version: the inbox and scripts keep working with them.
@@ -303,7 +348,7 @@ def taken_words(layout: Layout) -> set[str]:
     words |= {c.word for c in layout.columns} | {k.word for k in layout.kinds}
     for aliases in ALIASES.values():
         words |= set(aliases)
-    return words | {"hook", "--data", "activity"}  # the helper's own words and the inbox's activity marker
+    return words | {"hook", "--data", "activity", "themes"}  # the helper's own words and the inbox's activity marker
 
 
 # ---- the layout in use
@@ -321,4 +366,4 @@ def current() -> Layout:
 
 
 def copy(layout: Layout) -> Layout:
-    return replace(layout, columns=[replace(c) for c in layout.columns], kinds=[replace(k) for k in layout.kinds])
+    return replace(layout, columns=[replace(c) for c in layout.columns], kinds=[replace(k) for k in layout.kinds], themes=list(layout.themes))

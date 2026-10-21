@@ -21,7 +21,7 @@ from pathlib import Path
 
 from .hookrules import MR_URL_RE, HookConfig, looks_secret, match, regex_probe_main, slow_rules
 from .journal import append_inbox, inbox_path_for, repo_host
-from .journal_layout import Layout, configure as configure_layout, resolve_known
+from .journal_layout import ROLE_NOTE, Layout, configure as configure_layout, resolve_known, theme_of
 from .settings import Links, app_dir, read_settings, settings_path_for
 
 LOG_NAME = "hook-log.jsonl"
@@ -50,6 +50,10 @@ def log_path() -> Path:
 def inbox_main(argv: list[str] | None = None, prog: str | None = None) -> int:
     layout = Layout.from_settings(read_settings(settings_path_for(vault_path())))
     configure_layout(layout)
+    args_in = sys.argv[1:] if argv is None else argv
+    if args_in[:1] == ["themes"]:  # what a note may say, one per line: a session picks from these
+        print("\n".join(layout.themes) if layout.themes else "No themes are set: a note goes into line 1 as it is written.")
+        return 0
     words = [w for w, _l in layout.statuses()]
     parser = argparse.ArgumentParser(prog=prog, description="Daykeeper journal inbox")
     parser.add_argument("status", type=str.lower, help=" | ".join(words))
@@ -70,6 +74,11 @@ def inbox_main(argv: list[str] | None = None, prog: str | None = None) -> int:
         parser.error("this looks like a token or a key, and the journal is not the place for one: " + ", ".join(w[:8] + "…" for w in secret))
     n = append_inbox(path, args.status, args.items, date=args.date, note=args.note, origin=origin)
     print(f"inbox: +{n} ({args.status}) -> {path}")
+    resolved = resolve_known(args.status, layout)
+    if resolved and resolved[0] == "activity" and layout.role(resolved[1]) == ROLE_NOTE and layout.themes:
+        stray = [x for x in args.items if theme_of(x, layout.themes) is None]
+        if stray:  # kept as written, but a theme keeps line 1 short: say which there are
+            print("not a theme, goes into line 1 as written: " + "; ".join(stray) + "\nthemes: " + "; ".join(layout.themes), file=sys.stderr)
     return 0 if n else 1
 
 

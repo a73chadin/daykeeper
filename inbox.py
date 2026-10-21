@@ -10,10 +10,13 @@
     python inbox.py manual APP-101       # wrote manual test cases for the task
     python inbox.py auto APP-101         # wrote autotests for the task
     python inbox.py note "nightly run 1042 triage"
+    python inbox.py themes               # the themes a note may name, one per line
 
 Statuses: pass — tested successfully, fail — Test failed, bug — a newly filed bug;
 review / mr-open / mr-merged — an MR (number, !number or link), manual / auto — test
 cases for a task, note — any text. Activity goes into the report as lines under "1.".
+With themes set (Settings → Journal → Report), a note that names one goes into line 1 as
+that theme, once a day and in the order of the list; any other note goes there as written.
 Only work is filed: an item written inside a git repository whose remote is not on the
 tracker's or GitLab's host (a personal project) is dropped; --work / --personal decide
 by hand.

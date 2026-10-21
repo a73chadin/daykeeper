@@ -135,6 +135,16 @@ class SettingsTest(unittest.TestCase):
         self.assertIsNot(self.win.page("journal"), before, "the Journal tab was made anew")
         self.assertIn("New column", [c.label for c in settings_journal.jl.current().columns])
 
+    def test_note_themes_are_saved_and_survive_a_ready_made_layout(self):
+        dlg = self.open("journal")
+        section = dlg.pages["journal"]
+        section.themes.setPlainText("migration\n\n triage \nMigration")
+        section.use_preset(confirm=False)
+        self.assertEqual(section.layout_.themes, ["migration", "triage"])  # the field keeps what was typed
+        section.save()
+        self.assertEqual(settings_journal.jl.current().themes, ["migration", "triage"])
+        self.assertEqual(self.win.session.settings()["journal"]["themes"], ["migration", "triage"])
+
     def test_an_own_hook_rule(self):
         dlg = self.open("claude")
         section = dlg.pages["claude"]

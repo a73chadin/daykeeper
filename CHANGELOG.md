@@ -13,6 +13,14 @@
 - "From a call…" reads a transcript saved in UTF-16 or in the Windows Cyrillic code page,
   not only UTF-8.
 
+**Journal**
+- Note themes (Settings → Journal → Report): a note that names a theme of the list goes
+  into line 1 of the report as that theme, once a day and in the order of the list; other
+  notes go there as written. `inbox.py themes` lists them; "Teach Claude" puts them into
+  the instructions; a note that is not a theme gets a hint on the console.
+- A task failed and then passed the same day shows only as passed (and the same for any
+  columns that share a report phrase, like "in progress" and "done").
+
 ## 2.1.0 — an installer and signed updates
 
 **Install**

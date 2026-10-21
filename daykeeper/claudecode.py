@@ -393,7 +393,17 @@ def instructions(options: TeachOptions | None = None, parts: list[str] | None = 
         "anyway.",
     ]
     notes = note_words(words)
-    if notes:
+    themes = current_layout().themes
+    if notes and themes:
+        parts_ += [
+            "",
+            f"`{notes[0]}` — one per notable piece of work that is not covered above, at the end of",
+            "that piece. The text is one of these themes, word for word, and nothing more:",
+            "; ".join(themes) + ".",
+            f"When none fits, a few words in {options.note_language}, no keys or MR numbers. Not for",
+            "answers to questions or tiny edits.",
+        ]
+    elif notes:
         parts_ += [
             "",
             f"`{notes[0]}` — one per notable piece of work that is not covered above (a run triaged, a",

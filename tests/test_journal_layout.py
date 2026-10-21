@@ -64,7 +64,7 @@ class TesterReportUnchangedTest(LayoutCase):
         day = Day("2026-10-13", columns={"ok": ["APP-1"], "failed": ["APP-2"]}, plans="RFT")
         day.add_activity("review", "!42")
         text = build_report(day)
-        self.assertTrue(text.startswith("1. tested tasks, reviewed MRs\nMR reviews: !42\nTested successfully:\nAPP-1\n"), text)
+        self.assertTrue(text.startswith("1. tested tasks, reviewed MRs\nMR reviews: !42\n\nTested successfully:\nAPP-1\n"), text)
         self.assertTrue(text.endswith("2. RFT\n\n3. None"))
 
 
@@ -78,7 +78,7 @@ class DeveloperTest(LayoutCase):
         day.add_activity("note", "pairing on the release")
         self.assertEqual(day.auto_summary(), "development, bug fixes, code review, pairing on the release")
         text = build_report(day)
-        self.assertIn("MRs opened: !45\nMR reviews: !42\nTasks done:\nAPP-1\n\nIn progress:\n\nBugs fixed:\nAPP-9", text)
+        self.assertIn("MRs opened: !45\nMR reviews: !42\n\nTasks done:\nAPP-1\n\nIn progress:\n\nBugs fixed:\nAPP-9", text)
 
     def test_activity_lines_round_trip(self):
         got = parse_activity_lines("MRs opened: !1, !2\nsome note")
@@ -179,6 +179,75 @@ class FollowersTest(LayoutCase):
             self.assertIn(f"daykeeper-cli.exe {word} ", text)
         self.assertNotIn(" pass ", text)
         self.assertIn("`note` — one per notable piece", text)
+
+
+class ThemesTest(LayoutCase):
+    """Notes that name a theme of the list go into line 1 as that theme, once and in the
+    order of the list; other notes go there as written."""
+
+    THEMES = ["переезд на Zest", "чистка дублей тестовой базы", "тестирование UAT"]
+
+    def setUp(self):
+        super().setUp()
+        layout = jl.preset("qa")
+        layout.themes = list(self.THEMES)
+        jl.configure(layout)
+
+    def test_line_one_names_each_theme_once_in_the_list_order(self):
+        day = Day("2026-10-20", columns={"ok": ["APP-1"]})
+        for text in ("тестирование UAT", "Переезд на Zest.", "переезд на zest", "разбор зависаний поиска", "  чистка дублей тестовой базы "):
+            day.add_activity("note", text)
+        day.add_activity("review", "!42")
+        first = build_report(day).splitlines()[0]
+        self.assertEqual(first, "1. tested tasks, reviewed MRs, переезд на Zest, чистка дублей тестовой базы, тестирование UAT, разбор зависаний поиска")
+
+    def test_without_themes_notes_go_as_written_each_once(self):
+        jl.configure(jl.preset("qa"))
+        day = Day("2026-10-20")
+        for text in ("night triage", "Night triage", "skills"):
+            day.add_activity("note", text)
+        self.assertEqual(day.auto_summary(), "night triage, skills")
+
+    def test_themes_round_trip_and_are_cleaned(self):
+        layout = jl.Layout.from_settings({"journal": {**jl.preset("qa").to_settings()["journal"], "themes": [" a  b ", "A B", "", None, 3, "c"]}})
+        self.assertEqual(layout.themes, ["a b", "3", "c"])
+        self.assertEqual(jl.Layout.from_settings(layout.to_settings()).themes, ["a b", "3", "c"])
+        self.assertEqual(jl.copy(layout).themes, layout.themes)
+        self.assertIsNot(jl.copy(layout).themes, layout.themes)
+        self.assertEqual(jl.clean_themes("x\n\n y \nX"), ["x", "y"])
+
+    def test_the_last_verdict_of_the_day_wins(self):
+        day = Day("2026-10-20")
+        day.add("failed", "APP-7")
+        day.add("ok", "APP-7")
+        self.assertEqual((day.columns["ok"], day.columns["failed"]), (["APP-7"], []))
+        day.add("bugs", "APP-7")  # another phrase: not a verdict of the same thing
+        self.assertEqual(day.columns["ok"], ["APP-7"])
+
+    def test_the_inbox_lists_the_themes_and_warns_of_a_stray_note(self):
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault.pkv"
+            (Path(tmp) / "settings.json").write_text(json.dumps({"journal": {**jl.preset("qa").to_settings()["journal"], "themes": self.THEMES}}, ensure_ascii=False), encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            original = cli.vault_path
+            cli.vault_path = lambda: vault
+            self.addCleanup(setattr, cli, "vault_path", original)
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                self.assertEqual(cli.inbox_main(["themes"]), 0)
+                self.assertEqual(cli.inbox_main(["note", "тестирование UAT", "--work"]), 0)
+                self.assertEqual(err.getvalue(), "")
+                self.assertEqual(cli.inbox_main(["note", "что-то своё", "--work"]), 0)
+            self.assertIn("переезд на Zest\nчистка дублей тестовой базы\nтестирование UAT\n", out.getvalue())
+            self.assertIn("not a theme", err.getvalue())
+            self.assertEqual([i.item for i in read_inbox(Path(tmp) / "inbox.jsonl")], ["тестирование UAT", "что-то своё"])
+
+    def test_the_instructions_name_the_themes(self):
+        text = claudecode.instructions(claudecode.TeachOptions(), ["C:/bin/daykeeper-cli.exe"])
+        self.assertIn("переезд на Zest; чистка дублей тестовой базы; тестирование UAT.", text)
+        self.assertIn("one of these themes, word for word", text)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .i18n import _
-from .journal_layout import ALIASES, ROLE_MR, ROLE_NOTE, ROLE_PLAIN, ROLE_TESTS, current as current_layout, known_kind, resolve_known, role_of
+from .journal_layout import ALIASES, ROLE_MR, ROLE_NOTE, ROLE_PLAIN, ROLE_TESTS, current as current_layout, known_kind, resolve_known, role_of, themed
 from .settings import Links, private, readable
 
 _links = Links()  # tracker and GitLab addresses; the app sets them from settings.json (`configure`)
@@ -144,12 +144,19 @@ class Day:
         return self.columns.setdefault(name, [])
 
     def add(self, section: str, item: str) -> bool:
-        """Add an item to a column; False — already there."""
+        """Add an item to a column; False — already there. Columns that share a report
+        phrase are states of one thing (passed / failed, in progress / done): the item
+        leaves the others, so a task failed and then passed the same day is only passed."""
         item = normalize_item(item)
         items = self.section(section)
         if not item or item in items:
             return False
         items.append(item)
+        col = current_layout().column(section)
+        if col is not None and col.phrase:
+            for other in current_layout().columns:
+                if other.id != section and other.phrase == col.phrase and item in self.columns.get(other.id, []):
+                    self.columns[other.id].remove(item)
         return True
 
     def add_activity(self, kind: str, text: str) -> bool:
@@ -180,8 +187,9 @@ class Day:
 
     def auto_summary(self) -> str:
         """Phrase for «1.» when there is no own one: «tested tasks, reviewed MRs, new manual/autotests,
-        nightly run triage» — the column and activity phrases of the layout, then the notes of
-        the day, each as it was written."""
+        nightly run triage» — the column and activity phrases of the layout, then the themes the
+        notes of the day name (in the order of the layout's list), then the other notes as they
+        were written; nothing twice."""
         layout = current_layout()
         parts: list[str] = []
         for col in layout.visible_columns():
@@ -191,7 +199,8 @@ class Day:
             if kind.phrase and _(kind.phrase) not in parts and any(a["kind"] == kind.id for a in self.activities):
                 parts.append(_(kind.phrase))
         notes = {k.id for k in layout.visible_kinds() if k.role == ROLE_NOTE}
-        parts += [a["text"] for a in self.activities if a["kind"] in notes]
+        said = {p.casefold() for p in parts}
+        parts += [n for n in themed([a["text"] for a in self.activities if a["kind"] in notes], layout.themes) if n.casefold() not in said]
         if not parts:
             parts += [_(c.phrase) for c in layout.visible_columns() if c.phrase and c.phrase_alone and self.columns.get(c.id)]
         return ", ".join(parts)
@@ -285,6 +294,8 @@ def build_report(day: Day) -> str:
     tests = list(dict.fromkeys(tests))
     if tests:
         out.append(f"{_('New tests')}: {', '.join(tests)}")
+    if layout.visible_columns():
+        out.append("")  # line 1 and its activity stand apart from the columns
     for col in layout.visible_columns():
         out.append(f"{_(col.label)}:")
         out += [item_url(x) for x in day.columns.get(col.id, [])]
