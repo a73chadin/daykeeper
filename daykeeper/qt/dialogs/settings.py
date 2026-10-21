@@ -369,9 +369,10 @@ class SettingsWindow(QDialog):
         return s
 
     def _calls_group(self, s: Section) -> None:
-        """Notes from calls: where whisper.cpp and its model are, the language of the calls
-        and the threads. Each field is saved when it is left."""
-        from ...calls import SETTING_BINARY, SETTING_LANGUAGE, SETTING_MODEL, SETTING_THREADS, whisper_language
+        """Notes from calls: where whisper.cpp and its model are, the language of the calls,
+        the threads, and the folder watched for a downloaded transcript. Each field is saved
+        when it is left."""
+        from ...calls import SETTING_BINARY, SETTING_LANGUAGE, SETTING_MODEL, SETTING_THREADS, SETTING_WATCH, SETTING_WATCH_FOLDER, whisper_language
 
         g = s.group(_("Calls"), _("“From a call…” on the Notes tab makes a note of a call. A recording is first transcribed on this computer by whisper.cpp (whisper-cli and a ggml-*.bin model); a transcript needs neither."))
         current = self.shell.session.settings()
@@ -442,10 +443,41 @@ class SettingsWindow(QDialog):
         threads.setToolTip(_("Auto — half the processors, so the computer stays usable while a call is transcribed"))
         threads.currentIndexChanged.connect(lambda _i: save(SETTING_THREADS, int(threads.currentData())))
         grid.addWidget(threads, 3, 1, Qt.AlignmentFlag.AlignLeft)
+
+        watch = QCheckBox(_("Offer a note when a call's transcript is downloaded"), s.inner)
+        watch.setToolTip(_("A meeting service that writes a transcript lets you download it as a .txt file. When one comes to the folder below while the app is unlocked, a notice offers to make a note of it."))
+        watch.setChecked(bool(current.get(SETTING_WATCH, True)))
+        grid.addWidget(watch, 4, 0, 1, 3)
+        grid.addWidget(QLabel(_("Folder"), s.inner), 5, 0)
+        folder = QLineEdit(str(current.get(SETTING_WATCH_FOLDER) or ""), s.inner)
+        folder.setPlaceholderText(_("Empty — Downloads"))
+        grid.addWidget(folder, 5, 1)
+
+        def watch_changed() -> None:
+            save(SETTING_WATCH, watch.isChecked())
+            save(SETTING_WATCH_FOLDER, folder.text().strip().strip('"'))
+            folder.setEnabled(watch.isChecked())
+            self.shell.calls.restart()
+
+        def pick_folder() -> None:
+            from PySide6.QtWidgets import QFileDialog
+
+            path = QFileDialog.getExistingDirectory(self, _("Folder"), folder.text().strip())
+            if path and shiboken6.isValid(folder):  # the idle lock may have closed the window meanwhile
+                folder.setText(path)
+                watch_changed()
+
+        folder_btn = button(_("Choose…"), "small", s.inner)
+        folder_btn.clicked.connect(pick_folder)
+        grid.addWidget(folder_btn, 5, 2)
+        folder.setEnabled(watch.isChecked())
+        watch.toggled.connect(lambda _on: watch_changed())
+        folder.editingFinished.connect(watch_changed)
+        edits[SETTING_WATCH_FOLDER] = folder
         grid.setColumnStretch(1, 1)
         g.addLayout(grid)
         g.addWidget(err)
-        self.calls_parts = {"edits": edits, "threads": threads, "error": err, "save_language": save_language}
+        self.calls_parts = {"edits": edits, "threads": threads, "error": err, "save_language": save_language, "watch": watch}
 
     def _language_picked(self, code: str, on: bool) -> None:
         if on:

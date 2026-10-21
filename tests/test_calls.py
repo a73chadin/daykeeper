@@ -291,5 +291,143 @@ class TranscriptFileTest(unittest.TestCase):
                 calls.transcript_path(self.data, bad)
 
 
+
+
+# The shapes a meeting service's transcript may take: a header line with the speaker and
+# the time over the speech, or both on one line.
+SPEECH = [
+    ("Мария Петрова", "Давайте пройдёмся по плану выпуска на эту неделю и решим, что успеваем."),
+    ("Олег Смирнов", "Сборка готова, осталось проверить установщик на чистой машине и обновить описание."),
+    ("Мария Петрова", "Хорошо. Тогда описание пишу я до четверга, а ты берёшь проверку установщика."),
+    ("Олег Смирнов", "Договорились. Ещё нужно решить, кто отвечает на вопросы пользователей в пятницу."),
+    ("Мария Петрова", "В пятницу дежурит Анна, я ей напишу сегодня после встречи и пришлю ссылку."),
+    ("Олег Смирнов", "Отлично, тогда на этом всё, следующая встреча в понедельник в то же время."),
+]
+
+
+def header_style() -> str:
+    return "\n\n".join(f"{name} 00:{i:02d}:{(i * 7) % 60:02d}\n{text}" for i, (name, text) in enumerate(SPEECH))
+
+
+def inline_style() -> str:
+    return "\n".join(f"[{i}:{(i * 13) % 60:02d}] {name}: {text}" for i, (name, text) in enumerate(SPEECH))
+
+
+class LooksLikeCallTest(unittest.TestCase):
+    def test_speaker_lines_with_time_codes(self):
+        self.assertTrue(calls.looks_like_call(header_style()))
+        self.assertTrue(calls.looks_like_call(inline_style()))
+
+    def test_subtitles(self):
+        self.assertTrue(calls.looks_like_call("WEBVTT\n\n00:00.000 --> 00:02.000\nHello"))
+        srt = "".join(f"{i}\n00:00:0{i},000 --> 00:00:0{i},900\nline {i}\n\n" for i in range(1, 7))
+        self.assertTrue(calls.looks_like_call(srt))
+
+    def test_plain_notes_and_a_short_agenda_are_not_calls(self):
+        self.assertFalse(calls.looks_like_call("\n".join(text for _name, text in SPEECH)))
+        agenda = "\n".join(f"{h}:00 {topic}" for h, topic in zip(range(9, 15), ("Standup", "Review", "Lunch", "Planning", "Demo", "Retro"), strict=True))
+        self.assertFalse(calls.looks_like_call(agenda))
+
+    def test_times_that_jump_about_are_not_a_call(self):
+        lines = [f"{(i * 37) % 24}:{(i * 11) % 60:02d} {text}" for i, (_n, text) in enumerate(SPEECH * 2)]
+        self.assertFalse(calls.looks_like_call("\n".join(lines)))
+
+    def test_a_heading_then_time_speaker_and_speech_by_tabs(self):
+        body = "\n".join(f"00:{3 + i:02d}:{(i * 17) % 60:02d}\t{name}\t{text}" for i, (name, text) in enumerate(SPEECH))
+        text = 'Транскрипция записи "Запись Дейли команды " 19 октября 2026 г\n' + body
+        self.assertTrue(calls.looks_like_call(text))
+        self.assertEqual(calls.meeting_name(text), "Дейли команды")
+
+    def test_meeting_name_needs_a_quoted_heading(self):
+        self.assertEqual(calls.meeting_name("Transcript of «Weekly sync» 3 May\n00:01 Ann: hi"), "Weekly sync")
+        self.assertEqual(calls.meeting_name(inline_style()), "")  # the first line is speech
+        self.assertEqual(calls.meeting_name("Notes from the call\n0:01 hi"), "")
+
+    def test_dates_and_versions_are_not_time_codes(self):
+        lines = [f"Release 1.2.3 on 12.10.2026: {text}" for _n, text in SPEECH]
+        self.assertFalse(calls.looks_like_call("\n".join(lines)))
+
+
+class DecodeTextTest(unittest.TestCase):
+    def test_utf8_with_and_without_the_mark(self):
+        self.assertEqual(calls.decode_text("Привет".encode()), "Привет")
+        self.assertEqual(calls.decode_text("﻿Привет".encode()), "Привет")
+
+    def test_utf16_and_windows_1251(self):
+        self.assertEqual(calls.decode_text("Привет".encode("utf-16")), "Привет")
+        self.assertEqual(calls.decode_text("Привет".encode("cp1251")), "Привет")
+
+
+class NewTranscriptsTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.now = 1_000_000.0
+
+    def put(self, name: str, text: str, encoding: str = "utf-8") -> Path:
+        path = self.dir / name
+        path.write_bytes(text.encode(encoding))
+        return path
+
+    def look(self, since, times: dict):
+        """A look with each file's time as given: the real change and arrival times of a
+        file just written are now, and the arrival time cannot be set."""
+
+        def stat(path):
+            st = os.stat(path)
+            t = times[Path(path).name]
+            return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, st.st_gid, st.st_size, t, t, t))
+
+        return calls.new_transcripts(self.dir, since, self.now, stat=stat)
+
+    def test_the_first_look_only_sets_the_mark(self):
+        self.put("old.txt", header_style())
+        got = self.look(None, {"old.txt": self.now - 100})
+        self.assertEqual((got.found, got.since), ([], self.now))
+
+    def test_a_new_transcript_is_found_and_moves_the_mark(self):
+        self.put("call.txt", header_style())
+        got = self.look(self.now - 60, {"call.txt": self.now - 10})
+        self.assertEqual(got.found, [self.dir / "call.txt"])
+        self.assertEqual(got.since, self.now - 10)
+        again = self.look(got.since, {"call.txt": self.now - 10})
+        self.assertEqual(again.found, [])  # never offered twice
+
+    def test_other_new_files_move_the_mark_too(self):
+        self.put("notes.txt", "just a line")
+        self.put("photo.jpg", "x")
+        got = self.look(self.now - 60, {"notes.txt": self.now - 10, "photo.jpg": self.now - 5})
+        self.assertEqual(got.found, [])
+        self.assertEqual(got.since, self.now - 10)  # the picture is not even looked at
+
+    def test_a_file_being_written_waits(self):
+        self.put("call.txt", header_style())
+        got = self.look(self.now - 60, {"call.txt": self.now - 0.5})
+        self.assertEqual((got.found, got.since), ([], self.now - 60))
+
+    def test_older_files_empty_ones_and_hidden_ones_are_passed_over(self):
+        times = {}
+        for name, text, when in (("before.txt", header_style(), 100), ("empty.txt", "", 10), (".partial.txt", header_style(), 10), ("~lock.txt", header_style(), 10)):
+            self.put(name, text)
+            times[name] = self.now - when
+        self.assertEqual(self.look(self.now - 60, times).found, [])
+
+    def test_oldest_first_any_encoding(self):
+        self.put("b.txt", inline_style(), "cp1251")
+        self.put("a.vtt", "WEBVTT\n\n00:00.000 --> 00:01.000\nhi")
+        got = self.look(self.now - 60, {"b.txt": self.now - 10, "a.vtt": self.now - 20})
+        self.assertEqual(got.found, [self.dir / "a.vtt", self.dir / "b.txt"])
+
+    def test_a_missing_folder_keeps_the_mark(self):
+        got = calls.new_transcripts(self.dir / "gone", 5.0, self.now)
+        self.assertEqual((got.found, got.since), ([], 5.0))
+
+    def test_the_folder_from_the_settings_or_downloads(self):
+        home = Path("/home/sam")
+        self.assertEqual(calls.watch_folder({}, home), home / "Downloads")
+        self.assertEqual(calls.watch_folder({calls.SETTING_WATCH_FOLDER: " /data/in "}, home), Path("/data/in"))
+
+
 if __name__ == "__main__":
     unittest.main()

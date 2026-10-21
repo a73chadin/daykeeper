@@ -13,6 +13,9 @@ The pieces of the “Call → note” wizard that need no window:
   fields, tasks given as plain strings. A broken answer gives an empty digest, never an
   exception.
 - The data for the note card and the transcript file it links to.
+- The watch over a folder (Downloads by default): which files that came there since the
+  last look read as a call's transcript — speech lines with time codes in order, or
+  subtitles — so the window can offer a note of them.
 
 Nothing here starts a program: the caller runs the argv lists."""
 
@@ -40,6 +43,9 @@ SETTING_BINARY = "calls_whisper_binary"  # path to whisper-cli; empty — look i
 SETTING_MODEL = "calls_whisper_model"  # path to a ggml-*.bin; empty — next to the binary
 SETTING_LANGUAGE = "calls_language"  # whisper's -l: "auto", "en", "ru", …
 SETTING_THREADS = "calls_threads"  # whisper's -t; 0 — by the number of processors
+SETTING_WATCH = "calls_watch"  # offer a note when a call's transcript comes to the folder; on by default
+SETTING_WATCH_FOLDER = "calls_watch_folder"  # the folder looked at; empty — Downloads
+SETTING_WATCH_SINCE = "calls_watch_since"  # the time of the newest file already looked at
 
 DEFAULT_LANGUAGE = "auto"
 WHISPER_NAMES = ("whisper-cli", "whisper-cpp")  # the second is the Homebrew name
@@ -50,6 +56,12 @@ AUDIO_SUFFIXES = CONVERT_SUFFIXES | {".wav"}
 MODEL_RANK = ("large", "medium", "small", "base", "tiny")
 CALLS_DIR = "calls"
 TASK_MARK = "→ "
+MAX_TRANSCRIPT = 4 * 1024 * 1024  # bytes: a transcript file larger than this is refused
+WATCH_SUFFIXES = {".txt", ".vtt", ".srt"}  # what a meeting service gives for download
+WATCH_HEAD = 64 * 1024  # bytes of a new file read to tell a transcript
+WATCH_SETTLE = 2.0  # seconds a new file is left alone: it may still be being written
+MIN_TIMED_LINES = 5  # lines with a time code a transcript has at the least
+MIN_SPEECH_LETTERS = 300  # letters beside the time codes: a short agenda is not a call
 
 Which = Callable[[str], str | None]
 Exists = Callable[[str], bool]
@@ -397,3 +409,132 @@ def transcript_file(data_dir: str | os.PathLike, call_id: str, text: str) -> Pat
     body = text if text.endswith("\n") else text + "\n"
     write_private(path, body.encode("utf-8"))
     return path
+
+
+# ---- the watch over a folder
+
+
+def decode_text(raw: bytes) -> str:
+    """The text of a downloaded file: UTF-16 by its byte-order mark, else UTF-8 (with or
+    without the mark), else Windows-1251 — a Russian service may still save in it."""
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16", errors="replace")
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp1251", errors="replace")
+
+
+def watch_folder(settings: Mapping, home: Path | None = None) -> Path:
+    """The folder looked at: the one from the settings, else Downloads in the home folder."""
+    configured = str(settings.get(SETTING_WATCH_FOLDER) or "").strip()
+    return Path(configured) if configured else (home or Path.home()) / "Downloads"
+
+
+# 12:05, 1:02:03, 00:00:05,120 — not a part of a date, a version or a longer number
+_CLOCK = re.compile(r"(?<![\d:.])(\d{1,2}):([0-5]\d)(?::([0-5]\d))?(?![\d:])")
+
+
+def _clock_seconds(m: re.Match[str]) -> int:
+    a, b, c = m.group(1), m.group(2), m.group(3)
+    return int(a) * 3600 + int(b) * 60 + int(c) if c is not None else int(a) * 60 + int(b)
+
+
+def looks_like_call(text: str) -> bool:
+    """The text reads as a call's transcript: subtitles (WEBVTT, or cues with “-->”), or at
+    least MIN_TIMED_LINES lines with a time code, the codes going forward (nine pairs in
+    ten), on a tenth of the lines or more, with MIN_SPEECH_LETTERS letters of speech."""
+    head = text.lstrip("﻿ \t\r\n")
+    if head.startswith("WEBVTT"):
+        return True
+    lines = [x for x in text.splitlines() if x.strip()]
+    if sum(1 for x in lines if _SUBTITLE_TIME.match(x)) >= MIN_TIMED_LINES:
+        return True
+    times = []
+    for line in lines:
+        m = _CLOCK.search(line)
+        if m is not None:
+            times.append(_clock_seconds(m))
+    if len(times) < MIN_TIMED_LINES or len(times) * 10 < len(lines):
+        return False
+    forward = sum(1 for a, b in zip(times, times[1:], strict=False) if b >= a)
+    if forward * 10 < (len(times) - 1) * 9:
+        return False
+    letters = sum(1 for ch in _CLOCK.sub("", text) if ch.isalpha())
+    return letters >= MIN_SPEECH_LETTERS
+
+
+_QUOTED = re.compile(r'["«“„]\s*(.+?)\s*["»”“]')
+_RECORDING = re.compile(r"^(?:запись|recording)\s+", re.I)  # the name a service gives a recording
+
+
+def meeting_name(text: str) -> str:
+    """The meeting's name from a transcript's heading line — the first line, when it has no
+    time code and holds a name in quotes (`Transcript of "Daily sync" 19 Oct`); "" else."""
+    first = next((x for x in text.splitlines() if x.strip()), "")
+    if _CLOCK.search(first):
+        return ""
+    m = _QUOTED.search(first)
+    if m is None:
+        return ""
+    return _RECORDING.sub("", " ".join(m.group(1).split()))[:80].strip()
+
+
+@dataclass
+class FolderLook:
+    """What one look at the watched folder found: the transcripts that came since the last
+    look (oldest first) and the mark to keep for the next one."""
+
+    found: list[Path]
+    since: float
+
+
+def _read_head(path: Path) -> bytes:
+    with open(path, "rb") as f:
+        return f.read(WATCH_HEAD)
+
+
+def new_transcripts(
+    folder: Path,
+    since: float | None,
+    now: float,
+    listdir: ListDir = os.listdir,
+    stat: Callable[[Path], os.stat_result] = os.stat,
+    read: Callable[[Path], bytes] = _read_head,
+) -> FolderLook:
+    """The transcripts that came to `folder` after `since` (a file's time is the later of
+    its change and its arrival: a copy keeps an old change time). The first look (`since`
+    None) only sets the mark — what was there before is never offered. A file still
+    being written (younger than WATCH_SETTLE) waits for the next look; every other new
+    file moves the mark, transcript or not, so none is read twice."""
+    if since is None:
+        return FolderLook([], now)
+    try:
+        names = list(listdir(str(folder)))
+    except OSError:
+        return FolderLook([], since)
+    fresh: list[tuple[float, Path]] = []
+    mark = since
+    for name in names:
+        if name.startswith((".", "~")) or Path(name).suffix.lower() not in WATCH_SUFFIXES:
+            continue
+        path = folder / name
+        try:
+            st = stat(path)
+        except OSError:
+            continue
+        when = max(st.st_mtime, st.st_ctime)
+        if when <= since or when > now - WATCH_SETTLE:
+            continue
+        mark = max(mark, when)
+        if 0 < st.st_size <= MAX_TRANSCRIPT:
+            fresh.append((when, path))
+    found = []
+    for _when, path in sorted(fresh):
+        try:
+            text = decode_text(read(path))
+        except OSError:
+            continue
+        if looks_like_call(text):
+            found.append(path)
+    return FolderLook(found, mark)

@@ -1,5 +1,18 @@
 # Changes
 
+## Unreleased
+
+**Notes**
+- A call's transcript downloaded to Downloads is offered as a note: a notice for a minute,
+  a click opens "From a call…" on the file. It is told by its look — subtitles, or lines
+  of speech with time codes in order — so it works with any meeting service that lets
+  you download the transcript as text. On by default; Settings → General → Calls turns it
+  off or names another folder. Files that were there before are never offered.
+- A transcript whose first line names the meeting in quotes gives the card that name
+  instead of "Call <date>".
+- "From a call…" reads a transcript saved in UTF-16 or in the Windows Cyrillic code page,
+  not only UTF-8.
+
 ## 2.1.0 — an installer and signed updates
 
 **Install**

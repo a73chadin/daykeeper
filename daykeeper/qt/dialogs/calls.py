@@ -21,7 +21,11 @@ and the card can still be made from the transcript alone.
 
 The window is not modal: a recording takes minutes to transcribe and the rest of the app
 stays usable meanwhile. It closes on lock (registered with the main window), and closing
-it any way stops what runs and removes the temp folder."""
+it any way stops what runs and removes the temp folder.
+
+`CallWatch` looks at a folder (Downloads by default) while the vault is open: a call's
+transcript downloaded there — from a meeting service that writes one — is offered by a
+toast, and a click on it opens the wizard on that file."""
 
 from __future__ import annotations
 
@@ -30,34 +34,43 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import shiboken6
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QFileSystemWatcher, Qt
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar, QVBoxLayout, QWidget
 
 from ...assistant_runs import CREATE_NO_WINDOW, QuietRun, QuietRuns, kill_tree
 from ...assistants import Assignment, claude_command, quiet_argv, read_defaults
 from ...calls import (
+    MAX_TRANSCRIPT,
     SETTING_LANGUAGE,
     SETTING_THREADS,
+    SETTING_WATCH,
+    SETTING_WATCH_SINCE,
     TASK_MARK,
     Digest,
     Task,
+    decode_text,
     digest_prompt,
     ffmpeg_argv,
     is_audio,
     is_transcript,
+    meeting_name,
     needs_conversion,
     new_call_id,
+    new_transcripts,
     note_from_digest,
     parse_digest,
     parse_transcript,
     transcribe_argv,
     transcript_file,
+    watch_folder,
     whisper_binary,
     whisper_model,
 )
@@ -66,12 +79,16 @@ from ...journal import today
 from .. import theme
 from ..errors import guard_events
 from ..jobs import Waker, run_in_thread
+from ..timers import Debounce, Ticker
 from .base import Dialog, button, label
 
 WIDTH = 600  # px of the window at the system's text size
-MAX_TRANSCRIPT = 4 * 1024 * 1024  # bytes: a transcript file larger than this is refused
 DIGEST_PATIENCE = 300.0  # seconds the digest of a long call is waited on
 ERR_TAIL = 1500
+WATCH_EVERY_MS = 30_000  # the folder is looked at this often, besides on its change
+WATCH_SETTLE_MS = 3_000  # after a change of the folder: a download ends with a rename or two
+OFFER_MS = 60_000  # the toast offering a transcript stays this long
+OFFERS_AT_ONCE = 3  # more transcripts found in one look are left to "From a call…"
 FILE, PROGRESS, REVIEW = 0, 1, 2  # the screens
 
 
@@ -178,6 +195,7 @@ class CallWizard(Dialog):
         self.tmp: str | None = None
         self.source = ""
         self.transcript = ""
+        self.meeting = ""  # the meeting's name from the transcript's heading: the card's title
         self.created: Any = None  # the note made, once there is one
         self._waker = Waker(self._run_answered, self)
         # the screens one above the other, only the current one shown: the window takes the
@@ -365,7 +383,7 @@ class CallWizard(Dialog):
             if os.path.getsize(path) > MAX_TRANSCRIPT:
                 self.file_failed(_("The file is larger than {n} MB: that is not a transcript.").format(n=MAX_TRANSCRIPT // (1024 * 1024)))
                 return
-            text = Path(path).read_bytes().decode("utf-8-sig", errors="replace")
+            text = decode_text(Path(path).read_bytes())  # UTF-8, UTF-16 or a Russian Windows code page
         except OSError as exc:
             self.file_failed(_("Could not read the file: {error}").format(error=exc.strerror or exc))
             return
@@ -443,6 +461,7 @@ class CallWizard(Dialog):
             self.file_failed(_("There is no text in it: nothing to make a note of."))
             return
         self.transcript = text
+        self.meeting = meeting_name(text)
         settings = self._settings()
         assignment = Assignment(kind="custom", title=_("Digest of a call"), text=digest_prompt(text), channel="quiet")
         argv = self.tools.assistant_command(assignment, settings)
@@ -482,7 +501,7 @@ class CallWizard(Dialog):
         self.review_error.setVisible(bool(error))
         self.raw.setPlainText(raw)
         self.raw.setVisible(bool(raw))
-        self.title_edit.setText(note_from_digest(digest, today()).title)
+        self.title_edit.setText(note_from_digest(digest, today(), self.meeting).title)
         self.summary.setPlainText(digest.summary)
         self.notes_list.clear()
         for text in digest.notes:
@@ -505,7 +524,7 @@ class CallWizard(Dialog):
         if not shiboken6.isValid(page) or page.vault is None:
             self.reject()
             return
-        draft = note_from_digest(self.digest(), today())
+        draft = note_from_digest(self.digest(), today(), self.meeting)
         title = " ".join(self.title_edit.text().split()) or draft.title
         try:
             path = transcript_file(Path(self.shell.vault_path).parent, new_call_id(), self.transcript)
@@ -552,3 +571,96 @@ class CallWizard(Dialog):
 
     def on_lock(self) -> None:
         self._end_work()
+
+
+class CallWatch:
+    """Made once with the window. While the vault is open and the setting is on, the
+    watched folder is looked at on its change and every WATCH_EVERY_MS; every transcript
+    that came since the last look gets a toast, a click on it opens the wizard with the
+    file. A preview window looks at nothing (`active`)."""
+
+    def __init__(self, window: Any):
+        self.window = window
+        self.active = bool(getattr(window, "background_jobs", True))
+        self.now: Callable[[], float] = time.time  # tests move the clock
+        self.offered: list[Path] = []  # every file a toast was shown for (the tests read it)
+        self.toasts: list[Any] = []
+        self.wizard: CallWizard | None = None
+        self.tools: CallTools | None = None  # the wizard's programs; tests pass stand-ins
+        self._folder = ""
+        self._later = Debounce(window, WATCH_SETTLE_MS, self.look)
+        self._ticker = Ticker(window, WATCH_EVERY_MS, self.look)
+        self._fs = QFileSystemWatcher(window)
+        self._fs.directoryChanged.connect(lambda _path: self._later.touch())
+
+    def enabled(self) -> bool:
+        return self.active and bool(self.window.session.settings().get(SETTING_WATCH, True))
+
+    def folder(self) -> Path:
+        return watch_folder(self.window.session.settings())
+
+    # ---- when
+
+    def on_unlock(self) -> None:
+        self.restart()
+
+    def on_lock(self) -> None:
+        self._later.cancel()
+        self._ticker.stop()
+        self._watch("")
+        self.toasts = []  # they close on lock by themselves (the window's register_child)
+
+    def restart(self) -> None:
+        """The vault was opened or the setting changed: watch what the settings say now."""
+        self._later.cancel()
+        if self.window.vault is None or not self.enabled():
+            self._ticker.stop()
+            self._watch("")
+            return
+        self._watch(str(self.folder()))
+        self._ticker.start()
+        self._later.touch()
+
+    def _watch(self, folder: str) -> None:
+        if self._folder == folder:
+            return
+        if self._folder:
+            self._fs.removePath(self._folder)
+        self._folder = folder if folder and os.path.isdir(folder) else ""
+        if self._folder:
+            self._fs.addPath(self._folder)
+
+    # ---- looking
+
+    def look(self) -> list[Path]:
+        """One look at the folder; the transcripts found are offered and returned."""
+        if self.window.vault is None or not self.enabled():
+            return []
+        folder = self.folder()
+        self._watch(str(folder))  # made after the vault was opened: watched from now on
+        settings = self.window.session.settings()
+        raw = settings.get(SETTING_WATCH_SINCE)
+        since = float(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else None
+        seen = new_transcripts(folder, since, self.now())
+        if seen.since != since:
+            self.window.session.write_settings({SETTING_WATCH_SINCE: seen.since})
+        for path in seen.found[-OFFERS_AT_ONCE:]:
+            self.offer(path)
+        return seen.found
+
+    def offer(self, path: Path) -> None:
+        from ..widgets.toast import Toast
+
+        self.offered.append(path)
+        text = _("{name} — click to make a note of the call.").format(name=path.name)
+        self.toasts.append(Toast(self.window, "🎙  " + _("A call's transcript"), text, action=partial(self.open, path), ms=OFFER_MS))
+
+    def open(self, path: Path) -> CallWizard | None:
+        """The wizard on the Notes tab, already reading `path`."""
+        if self.window.vault is None:
+            return None
+        self.window.show_page("notes")
+        self.wizard = self.window.page("notes").from_call(self.tools)
+        if self.wizard is not None:
+            self.wizard.choose(str(path))
+        return self.wizard

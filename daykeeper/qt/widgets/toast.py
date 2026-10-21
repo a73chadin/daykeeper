@@ -28,11 +28,12 @@ GAP = 8  # px between stacked cards
 
 @guard_events
 class Toast(QWidget):
-    """A card with a title and a text; `url` or `action` makes it clickable."""
+    """A card with a title and a text; `url` or `action` makes it clickable; `ms` — how long
+    it stays."""
 
     stack: ClassVar[list[Toast]] = []
 
-    def __init__(self, window: QWidget | None, title: str, text: str, url: str = "", action: Callable[[], object] | None = None):
+    def __init__(self, window: QWidget | None, title: str, text: str, url: str = "", action: Callable[[], object] | None = None, ms: int = TOAST_MS):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)  # the card's rounded corners show what is under them
@@ -65,7 +66,7 @@ class Toast(QWidget):
         self.adjustSize()
         Toast.place_all(window)
         self.show()
-        self._timer.start(TOAST_MS)
+        self._timer.start(ms)
 
     @staticmethod
     def place_all(window: QWidget | None = None) -> None:

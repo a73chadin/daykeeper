@@ -413,6 +413,14 @@ The "Notes" tab — cards by day (`daykeeper/notes.py`, view —
   channel (see "Send to AI"); every item can be unticked or edited before the card is
   made. Without Claude Code the card holds the title and the transcript.
   `daykeeper/calls.py`, the window `daykeeper/qt/dialogs/calls.py`.
+- **A downloaded transcript is offered.** While the app is unlocked it looks at Downloads
+  (Settings → General → Calls: on by default, another folder can be set): a `.txt`,
+  `.vtt` or `.srt` that comes there and reads as a call — subtitles, or lines of speech
+  with time codes going forward, as a meeting service's "download the transcript" gives —
+  gets a notice for a minute; a click opens "From a call…" on that file. Only files that
+  came after the first look are offered, each once; only the first 64 KB of a new text
+  file are read to tell, and nothing leaves the computer until the click.
+  When the transcript's first line names the meeting in quotes, the card takes that name.
 - Search across all days covers titles, text, items and file names; "Unfinished" lists
   every card with open items.
 

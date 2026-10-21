@@ -321,6 +321,9 @@ class MainWindow(QMainWindow):
         from .dialogs.cliphistory import ClipWatch
 
         self.clip = ClipWatch(self)
+        from .dialogs.calls import CallWatch
+
+        self.calls = CallWatch(self)  # a call's transcript downloaded to the folder is offered as a note
         from .dialogs.update import UpdateWatch
 
         self.updates = UpdateWatch(self)  # the daily check for a new release and the update itself
@@ -485,6 +488,7 @@ class MainWindow(QMainWindow):
         if self.runs is not None:
             self.runs.on_unlock_later()
         self.digest.on_unlock()  # once a day, a moment after the routines of the unlock
+        self.calls.on_unlock()
         self.updates.on_unlock()  # a new version found while locked is told now
 
     def show_main(self) -> None:
@@ -533,6 +537,7 @@ class MainWindow(QMainWindow):
         self.expiry.on_lock()
         self.digest.on_lock()
         self.clip.on_lock()
+        self.calls.on_lock()
         self.session.lock()
         self.security.reset()
         self._drop_pages()
@@ -1011,6 +1016,7 @@ class MainWindow(QMainWindow):
         self.security.ticker.stop()
         self.expiry.on_lock()
         self.clip.on_lock()
+        self.calls.on_lock()
         event.accept()
 
     # ---- errors
