@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 2.2.0 — call transcripts from Downloads, note themes in the report
 
 **Notes**
 - A call's transcript downloaded to Downloads is offered as a note: a notice for a minute,
