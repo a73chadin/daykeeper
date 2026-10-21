@@ -1,5 +1,19 @@
 # Changes
 
+## 2.2.1 — the update check no longer times out
+
+**Updates**
+- The check for a new version and the download no longer stall: they asked GitHub to
+  close the connection after the answer, and on some networks the answer then stopped
+  halfway — "Could not check for updates: The read operation timed out" every other time.
+  A copy that still has this (2.2.0 and older) may need "Check for updates" pressed twice,
+  or the setup downloaded from the releases page.
+- An error under About takes the whole width instead of a word or two a line.
+
+**Build**
+- certifi 2026.10.19 (the CA list of the macOS build), after an advisory against
+  2026.10.18.
+
 ## 2.2.0 — call transcripts from Downloads, note themes in the report
 
 **Notes**

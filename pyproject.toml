@@ -3,7 +3,7 @@
 # PyInstaller (build.bat / build.sh), not installed as a package.
 [project]
 name = "daykeeper"
-version = "2.2.0"
+version = "2.2.1"
 description = "Passwords, bookmarks, a work journal, notes, routines and a calendar in one encrypted file"
 requires-python = ">=3.13,<3.16"
 dependencies = [

@@ -719,6 +719,7 @@ RU: dict[str, str] = {
     'What “Build report” puts together besides the columns and the activity.': 'Что ещё, кроме колонок и активности, собирает кнопка «Собрать отчёт».',
     'The Journal tab is rebuilt at once; the console commands and the Claude Code hook use the new words from their next run.': 'Вкладка «Дневник» перестроится сразу; консольные команды и хук Claude Code возьмут новые слова со следующего запуска.',
     'Journal layout saved': 'Устройство дневника сохранено',
+    'Too many redirects': 'Слишком много перенаправлений',
     'Note themes': 'Темы заметок',
     'One per line. A note that names one goes into line 1 as that theme, once a day and in this order; other notes go there as written. The command “inbox.py themes” lists them for a session.': 'По одной в строке. Заметка с темой из списка попадает в строку 1 этой темой — раз за день и в этом порядке; другие заметки идут туда как написаны. Команда «inbox.py themes» выводит список для сессии.',
     'Empty — every note goes into line 1 as written': 'Пусто — каждая заметка идёт в строку 1 как написана',

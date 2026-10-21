@@ -367,6 +367,7 @@ class UpdateRow(QWidget):
         line.addWidget(self.status, 0)
         line.addWidget(self.update_btn, 0)
         line.addStretch(1)
+        self._line = line
         col.addLayout(line)
         row = QHBoxLayout()
         self.check_btn = button(_("Check for updates"), "small", self)
@@ -395,6 +396,12 @@ class UpdateRow(QWidget):
         w = self.watch
         release = w.available
         self.update_btn.setVisible(release is not None)
+        # "Version X is out —" stays one line with "Update…" right after it; any other text
+        # (an error can be long) wraps over the free width — a wrapped label beside a stretch
+        # was given its narrowest size, a word or two a line
+        self.status.setWordWrap(release is None)
+        self._line.setStretch(0, 0 if release is not None else 1)  # the text
+        self._line.setStretch(2, 1 if release is not None else 0)  # the space after the button
         self.check_btn.setEnabled(w.state != "checking" and not getattr(w.window, "preview", False))
         if getattr(w.window, "preview", False):
             text = _("This is a preview copy: updates are installed from the main window.")

@@ -24,6 +24,7 @@ import base64
 import binascii
 import contextlib
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -227,37 +228,70 @@ def _https_only(url: str) -> None:
         raise UpdateError(_("Refused an address that is not HTTPS: {url}").format(url=url))
 
 
+MAX_REDIRECTS = 5  # a download goes from github.com to its file host: one hop, two at most
+
+
+class _Answer:
+    """An answer being read and the connection it came on: closing it closes both."""
+
+    def __init__(self, resp, conn):
+        self.resp, self.conn, self.headers = resp, conn, resp.headers
+
+    def read(self, n: int = -1) -> bytes:
+        return self.resp.read(n)
+
+    def close(self) -> None:
+        self.resp.close()
+        self.conn.close()
+
+    def __enter__(self) -> _Answer:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
 class Http:
     """GET over HTTPS with a timeout and a plain User-Agent, nothing else in the request.
     `get` reads a small answer whole; `stream` gives (size or 0, chunks). Tests put a fake
-    with the same two methods in its place."""
+    with the same two methods in its place.
+
+    http.client, not urllib: urllib asks the server to close the connection after the
+    answer (`Connection: close`), and on some networks GitHub's answer then stalls halfway
+    — the check timed out every other time while the same request without it never did."""
 
     def __init__(self, timeout: float = TIMEOUT):
         self.timeout = timeout
 
-    def _open(self, url: str, accept: str):
-        import urllib.request
+    def _open(self, url: str, accept: str) -> _Answer:
+        from urllib.parse import urljoin, urlsplit
 
-        _https_only(url)
-
-        class HttpsRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, req, fp, code, msg, headers, newurl):
-                _https_only(newurl)  # a download is redirected to GitHub's file host: HTTPS there too
-                return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=tls.context()), HttpsRedirect())
-        req = urllib.request.Request(url, headers={"User-Agent": user_agent(), "Accept": accept})  # noqa: S310 — https only, checked above
-        try:
-            return opener.open(req, timeout=self.timeout)
-        except UpdateError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — every network failure is one plain message
-            code = getattr(exc, "code", None)
-            raise UpdateError(f"HTTP {code}" if code else str(getattr(exc, "reason", exc) or type(exc).__name__)) from exc
+        for _hop in range(MAX_REDIRECTS + 1):
+            _https_only(url)  # a redirect to plain HTTP is refused like a first address
+            parts = urlsplit(url)
+            conn = http.client.HTTPSConnection(parts.hostname or "", parts.port or 443, timeout=self.timeout, context=tls.context())
+            try:
+                conn.request("GET", (parts.path or "/") + (f"?{parts.query}" if parts.query else ""), headers={"User-Agent": user_agent(), "Accept": accept})
+                resp = conn.getresponse()
+            except Exception as exc:  # noqa: BLE001 — every network failure is one plain message
+                conn.close()
+                raise UpdateError(str(exc) or type(exc).__name__) from exc
+            if resp.status in (301, 302, 303, 307, 308) and resp.getheader("Location"):
+                url = urljoin(url, resp.getheader("Location") or "")
+                conn.close()
+                continue
+            if resp.status != 200:
+                conn.close()
+                raise UpdateError(f"HTTP {resp.status}")
+            return _Answer(resp, conn)
+        raise UpdateError(_("Too many redirects"))
 
     def get(self, url: str, limit: int = SMALL_LIMIT, accept: str = "application/octet-stream") -> bytes:
         with self._open(url, accept) as resp:
-            body = resp.read(limit + 1)
+            try:
+                body = resp.read(limit + 1)
+            except (OSError, ValueError, http.client.HTTPException) as exc:
+                raise UpdateError(str(exc) or type(exc).__name__) from exc
         if len(body) > limit:
             raise UpdateError(_("The answer from the server is larger than expected"))
         return body
@@ -274,7 +308,7 @@ class Http:
                 while True:
                     try:
                         block = resp.read(CHUNK)
-                    except (OSError, ValueError) as exc:
+                    except (OSError, ValueError, http.client.HTTPException) as exc:
                         raise UpdateError(str(exc) or type(exc).__name__) from exc
                     if not block:
                         return

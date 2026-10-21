@@ -29,6 +29,38 @@ sys.path.insert(0, str(ROOT / "tools"))
 import sign_release  # noqa: E402
 
 
+class FakeConn:
+    """http.client.HTTPSConnection standing in: answers from `script` (url → (status,
+    headers, body)), remembers what was asked and how it was made."""
+
+    made: list[dict] = []
+    script: dict[str, tuple[int, dict, bytes]] = {}
+
+    def __init__(self, host, port, timeout=None, context=None):
+        self.host, self.port = host, port
+        FakeConn.made.append({"host": host, "port": port, "timeout": timeout, "context": context})
+        self.closed = False
+
+    def request(self, method, path, headers=None):
+        FakeConn.made[-1].update(method=method, path=path, headers=dict(headers or {}))
+        self.url = f"https://{self.host}{path}"
+
+    def getresponse(self):
+        status, headers, body = FakeConn.script[self.url]
+        resp = io.BytesIO(body)
+        resp.status, resp.headers = status, headers  # type: ignore[attr-defined]
+        resp.getheader = headers.get  # type: ignore[attr-defined]
+        return resp
+
+    def close(self):
+        self.closed = True
+
+
+def fake_conn(script: dict[str, tuple[int, dict, bytes]]):
+    FakeConn.made, FakeConn.script = [], script
+    return mock.patch("http.client.HTTPSConnection", FakeConn)
+
+
 class TlsTest(unittest.TestCase):
     """daykeeper/tls.py: certifi's CA list on a frozen macOS build, the system's elsewhere
     (a fake certifi and a fake ssl: nothing is installed or opened)."""
@@ -52,21 +84,10 @@ class TlsTest(unittest.TestCase):
         from daykeeper import tls
 
         sentinel = object()
-        handlers: list = []
-
-        class Opener:
-            def open(self, req, timeout):
-                return io.BytesIO(b"{}")
-
-        def build(*hs):
-            handlers.extend(hs)
-            return Opener()
-
-        with mock.patch.object(tls, "context", return_value=sentinel) as ctx, mock.patch("urllib.request.HTTPSHandler", side_effect=lambda context: ("https", context)), \
-                mock.patch("urllib.request.build_opener", side_effect=build):
+        with mock.patch.object(tls, "context", return_value=sentinel) as ctx, fake_conn({update.LATEST_URL: (200, {}, b"{}")}):
             update.Http().get(update.LATEST_URL)
         ctx.assert_called_once_with()
-        self.assertEqual(handlers[0], ("https", sentinel))
+        self.assertIs(FakeConn.made[0]["context"], sentinel)
 
 
 class VersionTest(unittest.TestCase):
@@ -156,36 +177,39 @@ class CheckTest(unittest.TestCase):
     def test_the_request_carries_only_the_user_agent_and_goes_over_https(self):
         """The real Http: one GET with User-Agent "Daykeeper/<version>" and Accept, a
         timeout, HTTPS only (the opener is a fake: nothing leaves)."""
-        seen = {}
-
-        class Resp(io.BytesIO):
-            headers: dict = {}
-
-        class Opener:
-            def open(self, req, timeout):
-                seen.update(url=req.full_url, headers=dict(req.header_items()), timeout=timeout, method=req.get_method())
-                return Resp(b"{}")
-
-        with mock.patch("urllib.request.build_opener", return_value=Opener()):
-            update.Http(timeout=7).get(update.LATEST_URL)
-        self.assertEqual(seen["method"], "GET")
-        self.assertEqual(seen["timeout"], 7)
-        self.assertEqual({k.lower(): v for k, v in seen["headers"].items()}, {"user-agent": f"Daykeeper/{__version__}", "accept": "application/octet-stream"})
+        with fake_conn({update.LATEST_URL: (200, {}, b"{}")}):
+            self.assertEqual(update.Http(timeout=7).get(update.LATEST_URL), b"{}")
+        seen = FakeConn.made[0]
+        self.assertEqual((seen["method"], seen["host"], seen["port"], seen["timeout"]), ("GET", "api.github.com", 443, 7))
+        self.assertEqual(seen["path"], "/repos/a73chadin/daykeeper/releases/latest")
+        self.assertEqual({k.lower(): v for k, v in seen["headers"].items()}, {"user-agent": f"Daykeeper/{__version__}", "accept": "application/octet-stream"},
+                         "no Connection: close — with it GitHub's answer stalled on some networks")
         with self.assertRaises(update.UpdateError):
             update.Http().get("http://api.github.com/repos/x/releases/latest")
 
     def test_a_redirect_to_plain_http_is_refused(self):
-        handler_cls = None
-
-        def capture(*handlers):
-            nonlocal handler_cls
-            handler_cls = type(handlers[1])
-            raise update.UpdateError("stop")
-
-        with mock.patch("urllib.request.build_opener", side_effect=capture), self.assertRaises(update.UpdateError):
+        with fake_conn({update.LATEST_URL: (302, {"Location": "http://example.invalid/file"}, b"")}), self.assertRaises(update.UpdateError):
             update.Http().get(update.LATEST_URL)
-        with self.assertRaises(update.UpdateError):
-            handler_cls().redirect_request(None, None, 302, "Found", {}, "http://example.invalid/file")
+        self.assertEqual(len(FakeConn.made), 1, "nothing was asked of the plain-HTTP address")
+
+    def test_a_download_follows_redirects_to_the_file_host(self):
+        first = "https://github.com/o/r/releases/download/v1/a.zip"
+        script = {
+            first: (302, {"Location": "https://objects.example.com/a.zip?sig=1"}, b""),
+            "https://objects.example.com/a.zip?sig=1": (200, {"Content-Length": "5"}, b"hello"),
+        }
+        with fake_conn(script):
+            size, chunks = update.Http().stream(first)
+            self.assertEqual((size, b"".join(chunks)), (5, b"hello"))
+        self.assertEqual([m["host"] for m in FakeConn.made], ["github.com", "objects.example.com"])
+        self.assertEqual(FakeConn.made[1]["path"], "/a.zip?sig=1")
+
+    def test_an_error_status_and_a_redirect_loop_are_plain_messages(self):
+        with fake_conn({update.LATEST_URL: (404, {}, b"")}), self.assertRaisesRegex(update.UpdateError, "HTTP 404"):
+            update.Http().get(update.LATEST_URL)
+        with fake_conn({update.LATEST_URL: (302, {"Location": update.LATEST_URL}, b"")}), self.assertRaises(update.UpdateError):
+            update.Http().get(update.LATEST_URL)
+        self.assertEqual(len(FakeConn.made), update.MAX_REDIRECTS + 1)
 
 
 class SignatureTest(unittest.TestCase):
