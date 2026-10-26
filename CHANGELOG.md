@@ -1,6 +1,6 @@
 # Changes
 
-## Not released yet
+## 2.3.0 — plans of the week
 
 **Notes**
 - Plans of the week. Each week stands on the left above its days ("📅 Week 26.10 – 01.11",
