@@ -1,6 +1,6 @@
 # Changes
 
-## Not released yet
+## 2.3.1 — the days of a week side by side
 
 **Notes**
 - The days of a week stand side by side as columns, as many as the width holds (four on
