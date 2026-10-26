@@ -1,5 +1,14 @@
 # Changes
 
+## Not released yet
+
+**Notes**
+- The days of a week stand side by side as columns, as many as the width holds (four on
+  a usual screen), the rest in the next row; the week's plans stay above them at full
+  width. A day's title drops the year, which the week's title already has.
+- "⤴ to today" is offered only on a past day (and "⤴ to this week" on a past week): a
+  card planned for a later day waits for its day.
+
 ## 2.3.0 — plans of the week
 
 **Notes**

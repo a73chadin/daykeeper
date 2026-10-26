@@ -291,6 +291,10 @@ class WeekViewTest(unittest.TestCase):
         self.assertEqual(groups[0].notes, [self.plan])
         self.assertIn(self.day, [n for g in groups[1:] for n in g.notes])
         self.assertTrue(all(g.header is not None for g in groups))
+        self.assertEqual([g.cell for g in groups], [False] + [True] * 7, "the days are cells of a grid")
+        mon, tue = groups[1].header.geometry(), groups[2].header.geometry()
+        self.assertEqual(mon.y(), tue.y(), "Monday and Tuesday side by side")
+        self.assertGreater(tue.x(), mon.x())
         card = self.page.new_note()
         self.assertTrue(card.note.week, "“+ Note” in a week adds a plan")
         sunday = notes_page.week_days(today())[-1]

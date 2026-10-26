@@ -60,15 +60,22 @@ class GroupSpec:
     notes: list[Note]
     date: str = ""
     week: bool = False
+    cell: bool = False  # a day of a week: a column of the days grid, not a full-width row
 
 
 @dataclass
 class CardGroup:
-    """A group on the page: its header line (or None) and the flow its cards lie in."""
+    """A group on the page: its header line (or None) and the flow its cards lie in; a cell
+    lies in the days grid, placed by hand."""
 
     header: QWidget | None
     flow: QWidget
     notes: list[Note] = field(default_factory=list)
+    cell: bool = False
+
+
+DAY_MIN_WIDTH = 260  # a day column of a week; as many as the width holds, the rest wrap below
+DAY_ROW_GAP = 22  # between two rows of day columns
 FILE_ICONS = {".md": "📝", ".markdown": "📝", ".txt": "📄", ".log": "📄", ".pdf": "📕", ".png": "🖼", ".jpg": "🖼", ".jpeg": "🖼"}
 RADIUS = 14
 PAD = 14
@@ -248,7 +255,7 @@ class NoteCard(QWidget):
             day = fmt_week(note.date) if note.week else fmt_day(note.date)
             self._foot.append(("day", QRect(x, y, fm["small"].horizontalAdvance(day), fm["small"].height()), day))
             x += self._foot[-1][1].width() + 10
-        if note.undone_items() and note.date != (week_start() if note.week else today()):
+        if note.undone_items() and note.date < (week_start() if note.week else today()):  # a past day or week; a planned one waits for its day
             carry = _("⤴ to this week") if note.week else _("⤴ to today")
             r = QRect(x, y, fm["small_bold"].horizontalAdvance(carry), fm["small_bold"].height())
             self._foot.append(("carry", r, carry))
@@ -930,6 +937,7 @@ class NotesPage(TabPage):
         icol.addWidget(self.groups_box)
         icol.addStretch(1)
         self.groups: list[CardGroup] = []
+        self.days_grid: QWidget | None = None
         self.flow = self._new_flow()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
@@ -1057,7 +1065,8 @@ class NotesPage(TabPage):
             monday = (self.nday or "")[len(WEEK):]
             specs = [GroupSpec(_("Plans of the week"), notes.for_week(monday), monday, week=True)]
             for day in week_days(monday):
-                specs.append(GroupSpec(fmt_day(day) + (_("  · today") if day == today() else ""), notes.for_day(day), day))
+                name = fmt_day(day)[:-5]  # "Mon 26.10": the year is in the week's title already
+                specs.append(GroupSpec(name + (_("  · today") if day == today() else ""), notes.for_day(day), day, cell=True))
             return fmt_week(monday) + (_("  · this week") if monday == week_start() else ""), specs
         day = self.nday or today()
         return fmt_day(day) + (_("  · today") if day == today() else ""), [GroupSpec("", notes.for_day(day))]
@@ -1068,18 +1077,21 @@ class NotesPage(TabPage):
     def across_days(self) -> bool:
         return self.nday in (UNFINISHED, WITH_FILES) or bool(self.search.text().strip())
 
-    def _new_flow(self) -> QWidget:
-        flow = QWidget(self.groups_box)
+    def _new_flow(self, parent: QWidget | None = None) -> QWidget:
+        """A flow for a group's cards: in the page's column, or placed by hand in `parent`."""
+        flow = QWidget(parent or self.groups_box)
         flow.setObjectName("NotesFlow")
         flow.installEventFilter(self)
-        self.groups_col.addWidget(flow)
+        if parent is None:
+            self.groups_col.addWidget(flow)
         return flow
 
-    def _group_header(self, spec: GroupSpec, first: bool) -> QWidget:
-        """A group's line: its name and a “+” that adds a card right into it."""
-        head = QWidget(self.groups_box)
+    def _group_header(self, spec: GroupSpec, first: bool, parent: QWidget | None = None) -> QWidget:
+        """A group's line: its name and a “+” that adds a card right into it. A header of a
+        cell goes in the days grid (`parent`) and keeps no margin above."""
+        head = QWidget(parent or self.groups_box)
         row = QHBoxLayout(head)
-        row.setContentsMargins(0, 0 if first else 14, 0, 4)
+        row.setContentsMargins(0, 0 if first or parent is not None else 14, 0, 4)
         row.setSpacing(8)
         name = label(spec.title, "", head)
         name.setFont(self.fonts["title"])  # as big as a card's title: the week's own title stays the heading
@@ -1089,7 +1101,8 @@ class NotesPage(TabPage):
         add.clicked.connect(lambda _c=False, s=spec: self.new_note(date=s.date, week=s.week))
         row.addWidget(add)
         row.addStretch(1)
-        self.groups_col.addWidget(head)
+        if parent is None:
+            self.groups_col.addWidget(head)
         return head
 
     def render_notes(self, keep_scroll: bool = False) -> None:
@@ -1102,24 +1115,35 @@ class NotesPage(TabPage):
             card.hide()
             card.deleteLater()
         self.cards = {}
-        old = [w for g in self.groups for w in (g.header, g.flow) if w is not None] or [self.flow]
+        old = [w for g in self.groups if not g.cell for w in (g.header, g.flow) if w is not None] or [self.flow]
+        if self.days_grid is not None:
+            old.append(self.days_grid)  # the cells go with it
         for w in old:
             self.groups_col.removeWidget(w)
             w.hide()
             w.deleteLater()
+        self.days_grid = None
         title, specs = self.visible_groups()
         self.title.setText(title)
         self.shown = [n for s in specs for n in s.notes]
         avail = self.avail_width()
         self.groups = []
         for i, spec in enumerate(specs):
-            header = self._group_header(spec, i == 0) if spec.title else None
-            group = CardGroup(header, self._new_flow(), spec.notes)
+            if spec.cell and self.days_grid is None:
+                self.days_grid = QWidget(self.groups_box)
+                self.groups_col.addWidget(self.days_grid)
+            parent = self.days_grid if spec.cell else None
+            header = self._group_header(spec, i == 0, parent) if spec.title else None
+            group = CardGroup(header, self._new_flow(parent), spec.notes, spec.cell)
             self.groups.append(group)
             for note in spec.notes:
                 card = NoteCard(self, group.flow, note, self.card_width(note, avail))
                 self.cards[note.id] = card
                 card.show()
+            if parent is not None:  # placed by hand, no layout shows them
+                group.flow.show()
+                if header is not None:
+                    header.show()
         self.flow = self.groups[0].flow
         self._flow_width = 0
         self.place_cards()
@@ -1165,33 +1189,62 @@ class NotesPage(TabPage):
             return
         self.empty.hide()
         groups = [[(n, self.cards[n.id]) for n in g.notes if n.id in self.cards] for g in self.groups]
-        headers = sum(g.header.sizeHint().height() for g in self.groups if g.header is not None)
+        heads = [g.header.sizeHint().height() if g.header is not None else 0 for g in self.groups]
 
-        def plan(avail: int) -> tuple[list[tuple[list[tuple[int, int]], list, int]], int]:
-            out, height = [], headers
-            for cards in groups:
-                sizes = []
-                for note, card in cards:
-                    w = self.card_width(note, avail)
-                    card.set_width(w)
-                    sizes.append((w, max(note.height, card.min_h) if note.height else card.natural_h))
-                spots, total = flow_layout(sizes, avail, CARD_GAP)
+        def stack(cards: list, avail: int) -> tuple[list[tuple[int, int]], list, int]:
+            sizes = []
+            for note, card in cards:
+                w = self.card_width(note, avail)
+                card.set_width(w)
+                sizes.append((w, max(note.height, card.min_h) if note.height else card.natural_h))
+            spots, total = flow_layout(sizes, avail, CARD_GAP)
+            return sizes, spots, total
+
+        def plan(avail: int) -> tuple[list[tuple[list[tuple[int, int]], list, int]], list[QRect], int, int]:
+            """The cards of every group, the box of every cell in the days grid, the grid's
+            height and the height of everything."""
+            out, boxes, height = [], [], 0
+            cols, col = column_width(avail, CARD_GAP, DAY_MIN_WIDTH)
+            cw = int(col)
+            x = y = row_h = 0
+            n = 0
+            for group, cards, head in zip(self.groups, groups, heads, strict=True):
+                sizes, spots, total = stack(cards, cw if group.cell else avail)
                 out.append((sizes, spots, total))
-                height += total + CARD_GAP if cards else 1
-            return out, height
+                if not group.cell:
+                    height += head + (total + CARD_GAP if cards else 1)
+                    continue
+                if n and n % cols == 0:
+                    x, y, row_h = 0, y + row_h + DAY_ROW_GAP, 0
+                h = head + (total if cards else 0)
+                boxes.append(QRect(x, y, cw, h))
+                row_h = max(row_h, h)
+                x += cw + CARD_GAP
+                n += 1
+            grid = y + row_h + CARD_GAP if boxes else 0
+            return out, boxes, grid, height + grid
 
         # the full width when everything fits, room for the scroll bar when it will not:
         # decided by the area's size alone, so the bar coming and going changes nothing
-        planned, height = plan(self.avail_width())
+        planned, boxes, grid, height = plan(self.avail_width())
         if height > self._room_height():
-            planned, height = plan(self.avail_width(bar=True))
-        for group, cards, (sizes, spots, total) in zip(self.groups, groups, planned, strict=True):
+            planned, boxes, grid, height = plan(self.avail_width(bar=True))
+        cells = iter(boxes)
+        for group, cards, head, (sizes, spots, total) in zip(self.groups, groups, heads, planned, strict=True):
             for (_n, card), (w, h), (x, y) in zip(cards, sizes, spots, strict=True):
                 if card.geometry() != QRect(x, y, w, h):
                     card.setGeometry(x, y, w, h)  # a new height of a dragged card relayouts in resizeEvent
-            want = total + CARD_GAP if cards else 1  # an empty day of a week is its header alone
+            if group.cell:
+                box = next(cells)
+                if group.header is not None:
+                    group.header.setGeometry(box.x(), box.y(), box.width(), head)
+                group.flow.setGeometry(box.x(), box.y() + head, box.width(), max(1, total))
+                continue
+            want = total + CARD_GAP if cards else 1
             if group.flow.height() != want:
                 group.flow.setFixedHeight(want)
+        if self.days_grid is not None and self.days_grid.height() != grid:
+            self.days_grid.setFixedHeight(grid)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if obj is self.flow and event.type() == QEvent.Type.Resize and self.flow.width() != self._flow_width:
