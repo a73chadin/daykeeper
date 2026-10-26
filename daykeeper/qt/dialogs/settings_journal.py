@@ -270,7 +270,7 @@ class JournalSection(QWidget):
             boxes.append(box)
         self.mr, self.plans, self.other = boxes
         g.addWidget(label(_("Note themes"), "section", s.inner))
-        hint = label(_("One per line. A note that names one goes into line 1 as that theme, once a day and in this order; other notes go there as written. The command “inbox.py themes” lists them for a session."), "muted", s.inner)
+        hint = label(_("One per line, a hint after “ — ” if you like (what goes under the theme; the report leaves it out). A note “theme” or “theme: what it was about” goes into line 1 as that theme with its subjects, once a day and in this order; other notes go there as written. The command “inbox.py themes” lists them for a session."), "muted", s.inner)
         hint.setWordWrap(True)
         g.addWidget(hint)
         self.themes = QPlainTextEdit(s.inner)

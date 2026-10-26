@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .i18n import _
-from .journal_layout import ALIASES, ROLE_MR, ROLE_NOTE, ROLE_PLAIN, ROLE_TESTS, current as current_layout, known_kind, resolve_known, role_of, themed
+from .journal_layout import ALIASES, ROLE_MR, ROLE_NOTE, ROLE_PLAIN, ROLE_TESTS, current as current_layout, known_kind, resolve_known, role_of, split_note, themed
 from .settings import Links, private, readable
 
 _links = Links()  # tracker and GitLab addresses; the app sets them from settings.json (`configure`)
@@ -188,8 +188,8 @@ class Day:
     def auto_summary(self) -> str:
         """Phrase for «1.» when there is no own one: «tested tasks, reviewed MRs, new manual/autotests,
         nightly run triage» — the column and activity phrases of the layout, then the themes the
-        notes of the day name (in the order of the layout's list), then the other notes as they
-        were written; nothing twice."""
+        notes of the day name (in the order of the layout's list, each with its subjects), then
+        the other notes as they were written; nothing twice."""
         layout = current_layout()
         parts: list[str] = []
         for col in layout.visible_columns():
@@ -203,7 +203,8 @@ class Day:
         parts += [n for n in themed([a["text"] for a in self.activities if a["kind"] in notes], layout.themes) if n.casefold() not in said]
         if not parts:
             parts += [_(c.phrase) for c in layout.visible_columns() if c.phrase and c.phrase_alone and self.columns.get(c.id)]
-        return ", ".join(parts)
+        # a theme with its subjects has commas of its own: then the parts stand apart by «;»
+        return ("; " if any(split_note(p, layout.themes) for p in parts if ":" in p) else ", ").join(parts)
 
     def counts(self) -> list[int]:
         return [len(self.columns.get(c.id, [])) for c in current_layout().visible_columns()]

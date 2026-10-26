@@ -21,7 +21,7 @@ from pathlib import Path
 
 from .hookrules import MR_URL_RE, HookConfig, looks_secret, match, regex_probe_main, slow_rules
 from .journal import append_inbox, inbox_path_for, repo_host
-from .journal_layout import ROLE_NOTE, Layout, configure as configure_layout, resolve_known, theme_of
+from .journal_layout import ROLE_NOTE, SUBJECT_WORDS, Layout, configure as configure_layout, resolve_known, split_note, theme_names
 from .settings import Links, app_dir, read_settings, settings_path_for
 
 LOG_NAME = "hook-log.jsonl"
@@ -76,9 +76,12 @@ def inbox_main(argv: list[str] | None = None, prog: str | None = None) -> int:
     print(f"inbox: +{n} ({args.status}) -> {path}")
     resolved = resolve_known(args.status, layout)
     if resolved and resolved[0] == "activity" and layout.role(resolved[1]) == ROLE_NOTE and layout.themes:
-        stray = [x for x in args.items if theme_of(x, layout.themes) is None]
+        stray = [x for x in args.items if split_note(x, layout.themes) is None]
         if stray:  # kept as written, but a theme keeps line 1 short: say which there are
-            print("not a theme, goes into line 1 as written: " + "; ".join(stray) + "\nthemes: " + "; ".join(layout.themes), file=sys.stderr)
+            print("not a theme, goes into line 1 as written: " + "; ".join(stray) + "\nthemes: " + "; ".join(theme_names(layout.themes)), file=sys.stderr)
+        long = [x for x in args.items if len((split_note(x, layout.themes) or ("", ""))[1].split()) > SUBJECT_WORDS]
+        if long:  # kept, but a sentence after the theme is the mess the themes were for
+            print(f"the subject is longer than {SUBJECT_WORDS} words, cut it to what the work was about: " + "; ".join(long), file=sys.stderr)
     return 0 if n else 1
 
 

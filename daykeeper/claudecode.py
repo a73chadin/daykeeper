@@ -27,7 +27,7 @@ from pathlib import Path
 
 from .hookrules import MATCHER
 from .i18n import _
-from .journal_layout import ROLE_MR, ROLE_NOTE, ROLE_TESTS, current as current_layout
+from .journal_layout import ROLE_MR, ROLE_NOTE, ROLE_TESTS, SUBJECT_WORDS, current as current_layout
 from .settings import app_dir
 
 HELPER_NAME = "daykeeper-cli.exe" if os.name == "nt" else "daykeeper-cli"
@@ -398,8 +398,10 @@ def instructions(options: TeachOptions | None = None, parts: list[str] | None = 
         parts_ += [
             "",
             f"`{notes[0]}` — one per notable piece of work that is not covered above, at the end of",
-            "that piece. The text is one of these themes, word for word, and nothing more:",
-            "; ".join(themes) + ".",
+            "that piece. The text is one of these themes, word for word, then a colon and what the",
+            f"work was about in two to {SUBJECT_WORDS} words: the thing itself, no keys, MR numbers or",
+            "how it went (`theme: subject`; the theme alone when there is nothing to add). The themes:",
+            *[f"- {t}" for t in themes],
             f"When none fits, a few words in {options.note_language}, no keys or MR numbers. Not for",
             "answers to questions or tiny edits.",
         ]

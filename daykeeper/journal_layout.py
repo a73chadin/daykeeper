@@ -188,34 +188,65 @@ def _theme_key(text: str) -> str:
 
 def clean_themes(raw) -> list[str]:
     """The themes as settings.json or the settings field gives them: texts, trimmed, without
-    blanks and repeats (whatever their case)."""
+    blanks and repeats of a theme (whatever their case or hint)."""
     if isinstance(raw, str):
         raw = raw.splitlines()
     out: list[str] = []
     seen: set[str] = set()
     for value in raw if isinstance(raw, list) else []:
         text = " ".join(str(value).split()) if value is not None else ""
-        if text and _theme_key(text) not in seen:
-            seen.add(_theme_key(text))
+        if text and _theme_key(theme_name(text)) not in seen:
+            seen.add(_theme_key(theme_name(text)))
             out.append(text)
     return out
 
 
+HINT = " — "  # «theme — what goes under it»: the hint is for the session choosing, not the report
+SUBJECT_WORDS = 6  # a subject longer than this is a sentence again: the inbox asks to cut it
+
+
+def theme_name(entry: str) -> str:
+    """The theme of a list entry: the text before its hint."""
+    return entry.split(HINT, 1)[0].strip()
+
+
+def theme_names(themes: list[str]) -> list[str]:
+    return [theme_name(t) for t in themes]
+
+
+def split_note(text: str, themes: list[str]) -> tuple[str, str] | None:
+    """(theme, subject) of a note that names a theme — «theme» alone or «theme: what it was
+    about» (case, spaces and a final full stop do not matter); None when it names none."""
+    head, sep, tail = text.partition(":")
+    for name in theme_names(themes):
+        if _theme_key(text) == _theme_key(name):
+            return name, ""
+        if sep and _theme_key(head) == _theme_key(name):
+            return name, " ".join(tail.split()).strip(" .;,")
+    return None
+
+
 def theme_of(text: str, themes: list[str]) -> str | None:
-    """The theme a note names (case, spaces and a final full stop do not matter), or None."""
-    key = _theme_key(text)
-    return next((t for t in themes if _theme_key(t) == key), None)
+    """The theme a note names, or None."""
+    found = split_note(text, themes)
+    return found[0] if found else None
 
 
 def themed(notes: list[str], themes: list[str]) -> list[str]:
-    """Notes for line 1: the themes they name, once each and in the order of the list, then
-    the notes that name none, as they were written (each once). No themes — the notes as
-    they are, each once."""
-    named = {theme_of(n, themes) for n in notes} - {None}
-    out = [t for t in themes if t in named]
-    seen = {_theme_key(t) for t in out}
+    """Notes for line 1: the themes they name, once each and in the order of the list, each
+    with what the day's notes said it was about («theme: a, b»), then the notes that name
+    none, as they were written (each once). No themes — the notes as they are, each once."""
+    subjects: dict[str, list[str]] = {}
     for n in notes:
-        if theme_of(n, themes) is None and _theme_key(n) not in seen:
+        found = split_note(n, themes)
+        if found is not None:
+            got = subjects.setdefault(found[0], [])
+            if found[1] and _theme_key(found[1]) not in {_theme_key(x) for x in got}:
+                got.append(found[1])
+    out = [f"{t}: {', '.join(subjects[t])}" if subjects[t] else t for t in theme_names(themes) if t in subjects]
+    seen = {_theme_key(t) for t in subjects}
+    for n in notes:
+        if split_note(n, themes) is None and _theme_key(n) not in seen:
             seen.add(_theme_key(n))
             out.append(n)
     return out

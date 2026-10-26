@@ -721,7 +721,7 @@ RU: dict[str, str] = {
     'Journal layout saved': 'Устройство дневника сохранено',
     'Too many redirects': 'Слишком много перенаправлений',
     'Note themes': 'Темы заметок',
-    'One per line. A note that names one goes into line 1 as that theme, once a day and in this order; other notes go there as written. The command “inbox.py themes” lists them for a session.': 'По одной в строке. Заметка с темой из списка попадает в строку 1 этой темой — раз за день и в этом порядке; другие заметки идут туда как написаны. Команда «inbox.py themes» выводит список для сессии.',
+    'One per line, a hint after “ — ” if you like (what goes under the theme; the report leaves it out). A note “theme” or “theme: what it was about” goes into line 1 as that theme with its subjects, once a day and in this order; other notes go there as written. The command “inbox.py themes” lists them for a session.': 'По одной в строке, после « — » можно подсказку (что относится к теме; в отчёт она не идёт). Заметка «тема» или «тема: над чем работали» попадает в строку 1 этой темой с её предметами — раз за день и в этом порядке; другие заметки идут туда как написаны. Команда «inbox.py themes» выводит список для сессии.',
     'Empty — every note goes into line 1 as written': 'Пусто — каждая заметка идёт в строку 1 как написана',
     'Use it': 'Взять его',
     'How the column or kind is called on the Journal tab and in the report.': 'Как колонка или вид называется на вкладке «Дневник» и в отчёте.',

@@ -332,8 +332,12 @@ only the day above them scrolls.
 - **Note themes** (Settings → Journal → Report): a list, one per line. A note that names
   a theme goes into line 1 as that theme — once a day, in the order of the list, whatever
   its case — and other notes go there as written, so a day of many sessions still gives one
-  short line. `inbox.py themes` prints the list, "Teach Claude" names it in the
-  instructions, and a note that is not a theme is kept with a hint on the console.
+  short line. A note may say what the work was about after a colon, `theme: subject`: line 1
+  then reads "theme: subject, subject" with the day's subjects of that theme, and its parts
+  stand apart by ";". A theme may carry a hint after " — " (what goes under it) for the
+  session that chooses; the report leaves the hint out. `inbox.py themes` prints the list,
+  "Teach Claude" names it in the instructions, and a note that is not a theme, or whose
+  subject runs past six words, is kept with a hint on the console.
 - A task failed and then passed the same day is only "passed": columns that share a report
   phrase are states of one thing, and an item added to one leaves the others.
 - **Inbox from sessions.** Scripts and AI sessions drop results into

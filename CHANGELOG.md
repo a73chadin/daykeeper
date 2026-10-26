@@ -1,5 +1,15 @@
 # Changes
 
+## 2.3.2 — what a theme was about
+
+**Journal**
+- A note may name a theme and what the work was about: `theme: subject`. Line 1 of the
+  report shows each theme once with the day's subjects ("bug triage: bugs ready for
+  deploy"), so the line stays short without becoming vague; a theme alone reads as before.
+- A theme of the list may carry a hint after " — ", what goes under it: the session that
+  picks a theme sees it, the report does not.
+- The inbox warns when a subject runs past six words.
+
 ## 2.3.1 — the days of a week side by side
 
 **Notes**

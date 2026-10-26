@@ -1,6 +1,7 @@
 """Journal layouts: the ready-made ones, editing, storage, and everything that follows the
 layout — the day, the report, the inbox words, the hook and the instructions for Claude."""
 
+from dataclasses import replace
 import json
 import tempfile
 import unittest
@@ -201,6 +202,19 @@ class ThemesTest(LayoutCase):
         first = build_report(day).splitlines()[0]
         self.assertEqual(first, "1. tested tasks, reviewed MRs, переезд на Zest, чистка дублей тестовой базы, тестирование UAT, разбор зависаний поиска")
 
+    def test_a_theme_carries_what_the_work_was_about(self):
+        jl.configure(replace(jl.current(), themes=["переезд на Zest — перенос кейсов и CLI", "тестирование UAT"]))
+        day = Day("2026-10-20")
+        for text in ("тестирование UAT: релиз 2.4", "Переезд на Zest", "переезд на zest: стампы в тестах.", "тестирование UAT: Релиз 2.4", "тестирование UAT: смоук прода", "разбор зависаний"):
+            day.add_activity("note", text)
+        self.assertEqual(day.auto_summary(), "переезд на Zest: стампы в тестах; тестирование UAT: релиз 2.4, смоук прода; разбор зависаний")
+        day = Day("2026-10-20")
+        day.add_activity("note", "переезд на Zest")  # no subject: the commas as before, the hint stays out
+        day.add_activity("note", "тестирование UAT")
+        self.assertEqual(day.auto_summary(), "переезд на Zest, тестирование UAT")
+        self.assertEqual(jl.split_note("разбор: чего-то", jl.current().themes), None)
+        self.assertEqual(jl.clean_themes("a — one\nA — two\nb"), ["a — one", "b"])
+
     def test_without_themes_notes_go_as_written_each_once(self):
         jl.configure(jl.preset("qa"))
         day = Day("2026-10-20")
@@ -239,15 +253,19 @@ class ThemesTest(LayoutCase):
                 self.assertEqual(cli.inbox_main(["themes"]), 0)
                 self.assertEqual(cli.inbox_main(["note", "тестирование UAT", "--work"]), 0)
                 self.assertEqual(err.getvalue(), "")
+                self.assertEqual(cli.inbox_main(["note", "тестирование UAT: релиз 2.4", "--work"]), 0)
+                self.assertEqual(err.getvalue(), "")
                 self.assertEqual(cli.inbox_main(["note", "что-то своё", "--work"]), 0)
+                self.assertIn("not a theme", err.getvalue())
+                self.assertEqual(cli.inbox_main(["note", "тестирование UAT: релиз и смоук прода с новой учёткой без чата", "--work"]), 0)
             self.assertIn("переезд на Zest\nчистка дублей тестовой базы\nтестирование UAT\n", out.getvalue())
-            self.assertIn("not a theme", err.getvalue())
-            self.assertEqual([i.item for i in read_inbox(Path(tmp) / "inbox.jsonl")], ["тестирование UAT", "что-то своё"])
+            self.assertIn("longer than 6 words", err.getvalue())
+            self.assertEqual(len(read_inbox(Path(tmp) / "inbox.jsonl")), 4)
 
     def test_the_instructions_name_the_themes(self):
         text = claudecode.instructions(claudecode.TeachOptions(), ["C:/bin/daykeeper-cli.exe"])
-        self.assertIn("переезд на Zest; чистка дублей тестовой базы; тестирование UAT.", text)
-        self.assertIn("one of these themes, word for word", text)
+        self.assertIn("- переезд на Zest\n- чистка дублей тестовой базы\n- тестирование UAT\n", text)
+        self.assertIn("one of these themes, word for word, then a colon", text)
 
 
 if __name__ == "__main__":
