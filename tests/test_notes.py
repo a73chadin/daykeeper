@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from daykeeper.journal import today
-from daykeeper.notes import COLOR_BG, Note, NoteItem, Notes
+from daykeeper.notes import COLOR_BG, Note, NoteItem, Notes, week_days, week_start
 from daykeeper.vault import Vault
 
 
@@ -182,6 +182,46 @@ class AttachmentTest(unittest.TestCase):
         copy = notes.carry_over(a, "2026-01-03")
         self.assertEqual([x.path for x in copy.attachments], [x.path for x in a.attachments])
         self.assertIsNot(copy.attachments[0], a.attachments[0])
+
+
+class WeekPlansTest(unittest.TestCase):
+    def test_week_start_and_days(self):
+        self.assertEqual(week_start("2026-10-29"), "2026-10-26")
+        self.assertEqual(week_start("2026-10-26"), "2026-10-26")
+        self.assertEqual(week_start("2026-11-01"), "2026-10-26", "Sunday ends the week")
+        self.assertEqual(week_start("not a date"), "not a date")
+        days = week_days("2026-12-30")
+        self.assertEqual((days[0], days[-1], len(days)), ("2026-12-28", "2027-01-03", 7), "a week across the new year")
+
+    def test_a_plan_belongs_to_the_week_not_to_a_day(self):
+        ns = Notes()
+        plan = ns.add("2026-10-29", week=True, title="week plan")
+        plan.add_item("ship 2.3")
+        day = ns.add("2026-10-26", title="monday")
+        day.add_item("x", done=True)
+        self.assertEqual(plan.date, "2026-10-26", "kept on the Monday")
+        self.assertEqual(ns.for_day("2026-10-26"), [day])
+        self.assertEqual(ns.dates(), ["2026-10-26"])
+        self.assertEqual(ns.for_week("2026-11-01"), [plan])
+        self.assertEqual(ns.day_progress("2026-10-26"), (1, 1), "a plan does not count in its Monday")
+        self.assertEqual(ns.week_progress("2026-10-28"), (0, 1))
+        ns.add("2026-11-03", title="next week")
+        self.assertEqual(ns.weeks(), ["2026-11-02", "2026-10-26"])
+        self.assertEqual(ns.unfinished(), [plan])
+        self.assertEqual([n.title for n in ns.search("")], ["next week", "week plan", "monday"], "a week's plans before its days")
+
+    def test_round_trip_and_carry_over_to_this_week(self):
+        ns = Notes()
+        plan = ns.add("2026-10-12", week=True, title="old plan")
+        plan.add_item("left over")
+        back = Note.from_dict(plan.to_dict())
+        self.assertTrue(back.week)
+        self.assertFalse(Note.from_dict({"title": "older file"}).week)
+        self.assertEqual(Note.from_dict({"date": "2026-10-14", "week": True}).date, "2026-10-12", "a plan sits on its Monday")
+        copy = ns.carry_over(plan)
+        self.assertTrue(copy.week)
+        self.assertEqual(copy.date, week_start(today()))
+        self.assertEqual([i.text for i in copy.items], ["left over"])
 
 
 class FlowLayoutTest(unittest.TestCase):

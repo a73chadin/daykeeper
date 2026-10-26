@@ -19,7 +19,7 @@ from datetime import date as Date, timedelta
 
 from .bookmarks import entry_login, entry_url, has_secret
 from .hookrules import looks_secret
-from .i18n import _, fmt_day, variants
+from .i18n import _, fmt_day, fmt_week, variants
 from .journal import ISSUE_KEY_RE, MR_URL_RE, normalize_item, normalize_mr, today as journal_today
 from .journal_layout import ROLE_MR, ROLE_NOTE, ROLE_PLAIN, Layout
 from .vault import MAIN_GROUP, main_group_label
@@ -143,7 +143,7 @@ def _note_title(note) -> str:
 def _note_item(note) -> Item:
     return Item(
         "note", note.id, _note_title(note),
-        f"{_(KIND_LABELS['note'])} · {fmt_day(note.date)}",
+        f"{_(KIND_LABELS['note'])} · {fmt_week(note.date) if note.week else fmt_day(note.date)}",
         [_fold(x) for x in (note.title, *(i.text for i in note.items)) if x.strip()],
         ["show"],
     )

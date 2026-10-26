@@ -31,6 +31,7 @@ from ...quick import ACTION_LABELS, Item, QuickEntry, index, parse_entry, rank, 
 from .. import icons, theme
 from ..errors import guard_events
 from ..jobs import Waker
+from ..pages.notes import note_key
 
 DEFAULT_HOTKEY = "ctrl+shift+space"
 LOCAL_SHORTCUT = "Ctrl+K"  # inside the app (one line of the window's shortcut table)
@@ -293,7 +294,7 @@ class QuickAccess:
         self.bring_main()
         self.shell.show_page("notes")
         page = self.shell.page("notes")
-        page.refresh_days(select=note.date)
+        page.refresh_days(select=note_key(note))
         card = getattr(page, "cards", {}).get(note.id)
         if card is not None:
             card.setFocus()

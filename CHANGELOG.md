@@ -1,5 +1,19 @@
 # Changes
 
+## Not released yet
+
+**Notes**
+- Plans of the week. Each week stands on the left above its days ("📅 Week 26.10 – 01.11",
+  done / total items of its plans). A click shows the week's plans and, under them, each
+  of its seven days with its cards, so the plan of the week and of the days are on one
+  screen. "+ Plan" adds a plan of the week, "+ Note" beside a day adds a card on that
+  day, and the week stays on screen. "+ Note" on the left adds a plan when a week is
+  shown. A plan of a past week has "⤴ to this week". Plans are found by search and
+  gathered in "Unfinished" like any card. A vault with plans opened by an older build
+  shows each plan on the Monday of its week.
+- Two cards of half the width no longer fall into separate rows when the scroll bar
+  takes an odd number of pixels.
+
 ## 2.2.1 — the update check no longer times out
 
 **Updates**

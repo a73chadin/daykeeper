@@ -145,6 +145,14 @@ in the item line; `Ctrl+N` on this tab also adds a note.
   into a new card for today (the old card stays as it was).
 - Search looks through titles, texts, items and file names of all days.
 
+**Plans of the week.** Each week stands on the left above its days: "📅 Week 26.10 –
+01.11" and the done / total items of its plans. A click on the week shows "Plans of the
+week" first and then all seven days of it, Monday to Sunday, each with its cards — the
+week's plan and the days' plans on one screen. "+ Plan" adds a plan of the week, "+ Note"
+next to a day adds a card on that day without leaving the week; "+ Note" and "+ Checklist"
+on the left add a plan while a week is shown. A plan of a past week with undone items has
+"⤴ to this week", which copies them into a new plan of the current week.
+
 ## 6b. Bookmarks
 
 "+ Bookmark" opens the editor: a title, the address, a group, a password entry to tie,

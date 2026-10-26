@@ -14,6 +14,7 @@ close it), so a busy day is a few widgets, not hundreds."""
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 import shiboken6
@@ -22,10 +23,10 @@ from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics, QIcon, QKeyEvent
 from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLineEdit, QListWidgetItem, QMenu, QPlainTextEdit, QToolTip, QVBoxLayout, QWidget
 
 from ... import palette
-from ...i18n import _, fmt_day, hotkeys
+from ...i18n import _, fmt_day, fmt_week, hotkeys
 from ...journal import today
 from ...layout import CARD_GAP, CARD_MIN_WIDTH, column_width, flow_layout
-from ...notes import MAX_SIZE, NOTE_COLORS, Attachment, Note, NoteItem
+from ...notes import MAX_SIZE, NOTE_COLORS, Attachment, Note, NoteItem, week_days, week_start
 from .. import icons, theme
 from ..dialogs.base import ask_yes_no, button, label, show_warning
 from ..timers import IdleOnce
@@ -37,6 +38,37 @@ from ..errors import guard_events
 CARD_SMALLEST = 200  # the narrowest a card can be dragged
 UNFINISHED = "__unfinished__"  # a “day” on the left: everything unfinished across all days
 WITH_FILES = "__files__"  # a “day” on the left: every card with attached files
+WEEK = "week:"  # a week on the left: "week:<Monday>" — its plans and the cards of its seven days
+
+
+def week_key(day: str) -> str:
+    """The key on the left of the week of `day`."""
+    return WEEK + week_start(day)
+
+
+def note_key(note: Note) -> str:
+    """The key on the left that shows `note`: its week for a week plan, its day otherwise."""
+    return week_key(note.date) if note.week else note.date
+
+
+@dataclass
+class GroupSpec:
+    """What a group of cards shows: its title ("" — no header), its cards, and where its
+    “+” adds one (a day, or with `week` the week of that day)."""
+
+    title: str
+    notes: list[Note]
+    date: str = ""
+    week: bool = False
+
+
+@dataclass
+class CardGroup:
+    """A group on the page: its header line (or None) and the flow its cards lie in."""
+
+    header: QWidget | None
+    flow: QWidget
+    notes: list[Note] = field(default_factory=list)
 FILE_ICONS = {".md": "📝", ".markdown": "📝", ".txt": "📄", ".log": "📄", ".pdf": "📕", ".png": "🖼", ".jpg": "🖼", ".jpeg": "🖼"}
 RADIUS = 14
 PAD = 14
@@ -213,11 +245,11 @@ class NoteCard(QWidget):
         self._foot.append(("stamp", QRect(x, y, fm["small"].horizontalAdvance(stamp), fm["small"].height()), stamp))
         x += self._foot[-1][1].width() + 10
         if self.page.across_days():
-            day = fmt_day(note.date)
+            day = fmt_week(note.date) if note.week else fmt_day(note.date)
             self._foot.append(("day", QRect(x, y, fm["small"].horizontalAdvance(day), fm["small"].height()), day))
             x += self._foot[-1][1].width() + 10
-        if note.undone_items() and note.date != today():
-            carry = _("⤴ to today")
+        if note.undone_items() and note.date != (week_start() if note.week else today()):
+            carry = _("⤴ to this week") if note.week else _("⤴ to today")
             r = QRect(x, y, fm["small_bold"].horizontalAdvance(carry), fm["small_bold"].height())
             self._foot.append(("carry", r, carry))
             self._zone(r.adjusted(-2, -2, 2, 2), "carry", None)
@@ -436,7 +468,7 @@ class NoteCard(QWidget):
         return {
             "plus": _("Add a checklist item (Enter adds and keeps typing)"),
             "clear": _("Remove the done items"),
-            "carry": _("Undone items as a new card for today"),
+            "carry": _("Undone items as a new plan of this week") if self.note.week else _("Undone items as a new card for today"),
             "more": _("Card settings"),
             "colour": _("Card colour"),
             "attach": _("Attach files"),
@@ -889,16 +921,21 @@ class NotesPage(TabPage):
         self.empty = label("", "muted", inner)
         self.empty.setWordWrap(True)
         icol.addWidget(self.empty)
-        self.flow = QWidget(inner)
-        self.flow.setObjectName("NotesFlow")
-        icol.addWidget(self.flow)
+        # the cards go in groups: one for a day or a list, the week's plans and each of its
+        # seven days for a week — a header (none for a single group) over a flow of cards
+        self.groups_box = QWidget(inner)
+        self.groups_col = QVBoxLayout(self.groups_box)
+        self.groups_col.setContentsMargins(0, 0, 0, 0)
+        self.groups_col.setSpacing(0)
+        icol.addWidget(self.groups_box)
         icol.addStretch(1)
+        self.groups: list[CardGroup] = []
+        self.flow = self._new_flow()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.addWidget(self.area)
         self._relayout = IdleOnce(self, self.place_cards)
         self._flow_width = 0
-        self.flow.installEventFilter(self)
         inner.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         inner.customContextMenuRequested.connect(lambda pos: self._tab_menu(inner, pos))
 
@@ -933,13 +970,23 @@ class NotesPage(TabPage):
             dates = notes.dates()
             if today() not in dates:
                 dates.insert(0, today())
-            for date in dates:
-                done, total = notes.day_progress(date)
-                item = add_count_item(self.days, f"  {fmt_day(date)}", date, f"{done} / {total}" if total else "")
-                if date == today():
+                dates.sort(reverse=True)  # a note planned for a later day stays above today
+            this_week = week_start()
+            # each week, newest first, over the days of it that have notes (and today)
+            for monday in sorted({*notes.weeks(), this_week}, reverse=True):
+                done, total = notes.week_progress(monday)
+                item = add_count_item(self.days, f"  📅 {fmt_week(monday)}", WEEK + monday, f"{done} / {total}" if total else "")
+                if monday == this_week:
                     f = item.font()
                     f.setBold(True)
                     item.setFont(f)
+                for date in (d for d in dates if week_start(d) == monday):
+                    done, total = notes.day_progress(date)
+                    item = add_count_item(self.days, f"      {fmt_day(date)}", date, f"{done} / {total}" if total else "")
+                    if date == today():
+                        f = item.font()
+                        f.setBold(True)
+                        item.setFont(f)
             target = select or self.nday or today()
             keys = [self.days.item(i).data(KEY_ROLE) for i in range(self.days.count())]
             if target not in keys:
@@ -978,6 +1025,9 @@ class NotesPage(TabPage):
             elif key == WITH_FILES:
                 n = len(notes.with_files())
                 item.setData(COUNT_ROLE, str(n) if n else "")
+            elif key.startswith(WEEK):
+                done, total = notes.week_progress(key[len(WEEK):])
+                item.setData(COUNT_ROLE, f"{done} / {total}" if total else "")
             else:
                 done, total = notes.day_progress(key)
                 item.setData(COUNT_ROLE, f"{done} / {total}" if total else "")
@@ -985,22 +1035,62 @@ class NotesPage(TabPage):
     # ---- the cards
 
     def visible_notes(self) -> tuple[str, list[Note]]:
+        """The title and every card shown, in order (the groups of a week one after another)."""
+        title, specs = self.visible_groups()
+        return title, [n for s in specs for n in s.notes]
+
+    def visible_groups(self) -> tuple[str, list[GroupSpec]]:
+        """The title and the groups of cards: one for a day, a list or a search; for a week —
+        its plans, then each of its seven days, every one with its own “+”."""
         notes = self.vault.notes
         query = self.search.text().strip()
         if query:
             hits = notes.search(query)
-            return _("Search “{query}”: {n}").format(query=query, n=len(hits)), hits
+            return _("Search “{query}”: {n}").format(query=query, n=len(hits)), [GroupSpec("", hits)]
         if self.nday == UNFINISHED:
             hits = notes.unfinished()
-            return _("Unfinished: {n}").format(n=len(hits)), hits
+            return _("Unfinished: {n}").format(n=len(hits)), [GroupSpec("", hits)]
         if self.nday == WITH_FILES:
             hits = notes.with_files()
-            return _("With files: {n}").format(n=len(hits)), hits
+            return _("With files: {n}").format(n=len(hits)), [GroupSpec("", hits)]
+        if self.week_view():
+            monday = (self.nday or "")[len(WEEK):]
+            specs = [GroupSpec(_("Plans of the week"), notes.for_week(monday), monday, week=True)]
+            for day in week_days(monday):
+                specs.append(GroupSpec(fmt_day(day) + (_("  · today") if day == today() else ""), notes.for_day(day), day))
+            return fmt_week(monday) + (_("  · this week") if monday == week_start() else ""), specs
         day = self.nday or today()
-        return fmt_day(day) + (_("  · today") if day == today() else ""), notes.for_day(day)
+        return fmt_day(day) + (_("  · today") if day == today() else ""), [GroupSpec("", notes.for_day(day))]
+
+    def week_view(self) -> bool:
+        return bool(self.nday and self.nday.startswith(WEEK)) and not self.search.text().strip()
 
     def across_days(self) -> bool:
         return self.nday in (UNFINISHED, WITH_FILES) or bool(self.search.text().strip())
+
+    def _new_flow(self) -> QWidget:
+        flow = QWidget(self.groups_box)
+        flow.setObjectName("NotesFlow")
+        flow.installEventFilter(self)
+        self.groups_col.addWidget(flow)
+        return flow
+
+    def _group_header(self, spec: GroupSpec, first: bool) -> QWidget:
+        """A group's line: its name and a “+” that adds a card right into it."""
+        head = QWidget(self.groups_box)
+        row = QHBoxLayout(head)
+        row.setContentsMargins(0, 0 if first else 14, 0, 4)
+        row.setSpacing(8)
+        name = label(spec.title, "", head)
+        name.setFont(self.fonts["title"])  # as big as a card's title: the week's own title stays the heading
+        row.addWidget(name)
+        add = button(_("+ Plan") if spec.week else _("+ Note"), "link", head)
+        add.setToolTip(_("A new plan of this week") if spec.week else _("A new note on this day"))
+        add.clicked.connect(lambda _c=False, s=spec: self.new_note(date=s.date, week=s.week))
+        row.addWidget(add)
+        row.addStretch(1)
+        self.groups_col.addWidget(head)
+        return head
 
     def render_notes(self, keep_scroll: bool = False) -> None:
         """Rebuild the cards (day change, search, deletion, order change)."""
@@ -1012,14 +1102,26 @@ class NotesPage(TabPage):
             card.hide()
             card.deleteLater()
         self.cards = {}
-        title, shown = self.visible_notes()
+        old = [w for g in self.groups for w in (g.header, g.flow) if w is not None] or [self.flow]
+        for w in old:
+            self.groups_col.removeWidget(w)
+            w.hide()
+            w.deleteLater()
+        title, specs = self.visible_groups()
         self.title.setText(title)
-        self.shown = shown
+        self.shown = [n for s in specs for n in s.notes]
         avail = self.avail_width()
-        for note in shown:
-            card = NoteCard(self, self.flow, note, self.card_width(note, avail))
-            self.cards[note.id] = card
-            card.show()
+        self.groups = []
+        for i, spec in enumerate(specs):
+            header = self._group_header(spec, i == 0) if spec.title else None
+            group = CardGroup(header, self._new_flow(), spec.notes)
+            self.groups.append(group)
+            for note in spec.notes:
+                card = NoteCard(self, group.flow, note, self.card_width(note, avail))
+                self.cards[note.id] = card
+                card.show()
+        self.flow = self.groups[0].flow
+        self._flow_width = 0
         self.place_cards()
         self.area.verticalScrollBar().setValue(top if keep_scroll else 0)
 
@@ -1043,7 +1145,7 @@ class NotesPage(TabPage):
         content = area.widget()
         inner = content.layout() if content is not None else None
         bottom = inner.contentsMargins().bottom() if inner is not None else 0
-        return area.height() - 2 * area.frameWidth() - self.flow.y() - bottom
+        return area.height() - 2 * area.frameWidth() - self.groups_box.y() - bottom
 
     def card_width(self, note: Note, avail: int) -> int:
         cols, col = column_width(avail, CARD_GAP, CARD_MIN_WIDTH)
@@ -1051,38 +1153,45 @@ class NotesPage(TabPage):
             w = note.width
         else:
             span = min(note.span, cols)
-            w = round(col * span + CARD_GAP * (span - 1))
+            w = int(col * span + CARD_GAP * (span - 1))  # down: two halves of an odd width rounded up overflow the row
         return max(min(CARD_SMALLEST, avail), min(w, avail))
 
     def place_cards(self) -> None:
-        shown = self.shown
-        if not shown:
+        if not self.shown and not self.week_view():
             self.empty.setText(hotkeys(_("Nothing here yet. “+ Note” or “+ Checklist” on the left; Ctrl+N also adds a note.")) if not self.search.text().strip() else _("Nothing found."))
             self.empty.show()
-            self.flow.setFixedHeight(1)
+            for group in self.groups:
+                group.flow.setFixedHeight(1)
             return
         self.empty.hide()
-        cards = [(n, self.cards[n.id]) for n in shown if n.id in self.cards]
+        groups = [[(n, self.cards[n.id]) for n in g.notes if n.id in self.cards] for g in self.groups]
+        headers = sum(g.header.sizeHint().height() for g in self.groups if g.header is not None)
 
-        def plan(avail: int) -> tuple[list[tuple[int, int]], list, int]:
-            sizes = []
-            for note, card in cards:
-                w = self.card_width(note, avail)
-                card.set_width(w)
-                sizes.append((w, max(note.height, card.min_h) if note.height else card.natural_h))
-            spots, total = flow_layout(sizes, avail, CARD_GAP)
-            return sizes, spots, total
+        def plan(avail: int) -> tuple[list[tuple[list[tuple[int, int]], list, int]], int]:
+            out, height = [], headers
+            for cards in groups:
+                sizes = []
+                for note, card in cards:
+                    w = self.card_width(note, avail)
+                    card.set_width(w)
+                    sizes.append((w, max(note.height, card.min_h) if note.height else card.natural_h))
+                spots, total = flow_layout(sizes, avail, CARD_GAP)
+                out.append((sizes, spots, total))
+                height += total + CARD_GAP if cards else 1
+            return out, height
 
         # the full width when everything fits, room for the scroll bar when it will not:
         # decided by the area's size alone, so the bar coming and going changes nothing
-        sizes, spots, total = plan(self.avail_width())
-        if total + CARD_GAP > self._room_height():
-            sizes, spots, total = plan(self.avail_width(bar=True))
-        for (_n, card), (w, h), (x, y) in zip(cards, sizes, spots, strict=True):
-            if card.geometry() != QRect(x, y, w, h):
-                card.setGeometry(x, y, w, h)  # a new height of a dragged card relayouts in resizeEvent
-        if self.flow.height() != total + CARD_GAP:
-            self.flow.setFixedHeight(total + CARD_GAP)
+        planned, height = plan(self.avail_width())
+        if height > self._room_height():
+            planned, height = plan(self.avail_width(bar=True))
+        for group, cards, (sizes, spots, total) in zip(self.groups, groups, planned, strict=True):
+            for (_n, card), (w, h), (x, y) in zip(cards, sizes, spots, strict=True):
+                if card.geometry() != QRect(x, y, w, h):
+                    card.setGeometry(x, y, w, h)  # a new height of a dragged card relayouts in resizeEvent
+            want = total + CARD_GAP if cards else 1  # an empty day of a week is its header alone
+            if group.flow.height() != want:
+                group.flow.setFixedHeight(want)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if obj is self.flow and event.type() == QEvent.Type.Resize and self.flow.width() != self._flow_width:
@@ -1248,7 +1357,8 @@ class NotesPage(TabPage):
         if note.done_items() and card is not None:
             menu.addAction(_("Clear done items")).triggered.connect(lambda: self.note_clear_done(card, note))
         if note.undone_items():
-            menu.addAction(_("Copy undone items to today")).triggered.connect(lambda: self.note_carry_over(note))
+            carry = _("Copy undone items to this week") if note.week else _("Copy undone items to today")
+            menu.addAction(carry).triggered.connect(lambda: self.note_carry_over(note))
         menu.addSeparator()
         menu.addAction(_("Delete note")).triggered.connect(lambda: self.note_delete(note))
         menu.popup(pos)
@@ -1314,8 +1424,9 @@ class NotesPage(TabPage):
         if copy is None:
             return
         self.shell.mark_dirty("notes")
-        self.refresh_days(select=today())
-        self.shell.set_status(_("Carried over to today: {n} item(s)").format(n=len(copy.items)))
+        self.refresh_days(select=note_key(copy))
+        done = _("Carried over to this week: {n} item(s)") if copy.week else _("Carried over to today: {n} item(s)")
+        self.shell.set_status(done.format(n=len(copy.items)))
 
     def note_delete(self, note: Note) -> None:
         if not note.is_empty() and not ask_yes_no(self.shell, _("Delete note “{title}”?").format(title=note.title or _("untitled"))):
@@ -1324,17 +1435,25 @@ class NotesPage(TabPage):
         self.shell.mark_dirty("notes")
         self.refresh_days()
 
-    def new_note(self, checklist: bool = False) -> NoteCard | None:
+    def new_note(self, checklist: bool = False, date: str | None = None, week: bool | None = None) -> NoteCard | None:
+        """A new card: on `date`, or a plan of its week with `week`; by default on the day
+        shown, and a plan of the week when a week is shown (today in a list). A card added
+        inside a week keeps the week on screen."""
         if self.vault is None:
             return None
-        date = self.nday if self.nday not in (None, UNFINISHED, WITH_FILES) else today()
+        key = self.nday or today()
+        in_week = key.startswith(WEEK)
+        if date is None:
+            date = key[len(WEEK):] if in_week else key if key not in (UNFINISHED, WITH_FILES) else today()
+        if week is None:
+            week = in_week
         if self.search.text():
             self.search.blockSignals(True)
             self.search.setText("")
             self.search.blockSignals(False)
-        note = self.vault.notes.add(date)
+        note = self.vault.notes.add(date, week=week)
         self.shell.mark_dirty("notes")
-        self.refresh_days(select=date)
+        self.refresh_days(select=key if in_week and week_start(date) == key[len(WEEK):] else note_key(note))
         card = self.cards.get(note.id)
         if card is not None:
             card.edit("add" if checklist else "title")

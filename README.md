@@ -397,8 +397,10 @@ not undone (`daykeeper/undo.py`).
 
 ## Notes
 
-The "Notes" tab — cards by day (`daykeeper/notes.py`, view —
-`daykeeper/qt/pages/notes.py`): a title, text, a checklist and attached files.
+The "Notes" tab — cards by day and plans of the week (`daykeeper/notes.py`, view —
+`daykeeper/qt/pages/notes.py`): a title, text, a checklist and attached files. A week on
+the left shows its plans and the cards of its seven days on one screen, with a "+" for
+each.
 
 - Checklist items are added from the "+ Add item" row at the bottom of the list: Enter
   adds and keeps typing. A tick moves the item under "Done (n)", which folds; "Clear"

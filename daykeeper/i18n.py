@@ -4,6 +4,7 @@ settings.json; without a setting the system UI language decides."""
 
 from __future__ import annotations
 
+import datetime
 import os
 import subprocess
 import sys
@@ -59,6 +60,16 @@ def fmt_day(date: str) -> str:
     except ValueError:
         return date
     return f"{_(WEEKDAYS[t.tm_wday])} {t.tm_mday:02d}.{t.tm_mon:02d}.{t.tm_year}"
+
+
+def fmt_week(monday: str) -> str:
+    """"2026-10-26" (a Monday) → "Week 26.10 – 01.11" in the UI language; other text as is."""
+    try:
+        start = datetime.date.fromisoformat(monday)
+    except ValueError:
+        return monday
+    end = start + datetime.timedelta(days=6)
+    return _("Week {start} – {end}").format(start=start.strftime("%d.%m"), end=end.strftime("%d.%m"))
 
 
 def fmt_month(year: int, month: int, with_year: bool = True) -> str:

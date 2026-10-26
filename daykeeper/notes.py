@@ -2,8 +2,10 @@
 
 Stored inside the encrypted vault (key `notes`). The day of a note is the day it belongs
 to (the creation day by default); unfinished items can be carried over to today as a new
-card. Attached files are links to files on disk (the vault keeps the path, not the
-content), so a Markdown file opened from a note is always its current version."""
+card. A week note (`week` set) is the plan of a whole week: its `date` is the Monday of
+that week and it belongs to no single day (an older build that ignores the flag shows it
+on that Monday). Attached files are links to files on disk (the vault keeps the path, not
+the content), so a Markdown file opened from a note is always its current version."""
 
 from __future__ import annotations
 
@@ -11,6 +13,8 @@ import os
 import secrets
 import time
 from dataclasses import dataclass, field
+from datetime import date as Date
+from datetime import timedelta
 from pathlib import Path
 
 from . import palette
@@ -38,6 +42,22 @@ TEXT_SUFFIXES = {".md", ".markdown", ".mdown", ".txt", ".log"}
 
 def _new_id() -> str:
     return secrets.token_hex(6)
+
+
+def week_start(day: str | None = None) -> str:
+    """The Monday of the week of "YYYY-MM-DD" (today by default); text that is no date stays as is."""
+    day = day or today()
+    try:
+        d = Date.fromisoformat(day)
+    except ValueError:
+        return day
+    return (d - timedelta(days=d.weekday())).isoformat()
+
+
+def week_days(day: str) -> list[str]:
+    """The seven days, Monday to Sunday, of the week of `day`."""
+    start = Date.fromisoformat(week_start(day))
+    return [(start + timedelta(days=i)).isoformat() for i in range(7)]
 
 
 @dataclass
@@ -99,6 +119,7 @@ class Note:
     width: int = 0  # the width dragged by the right edge, in 96-dpi pixels; 0 — by the columns
     height: int = 0  # the height dragged by the bottom edge, in 96-dpi pixels; 0 — by the content
     hide_done: bool = False  # done items collapsed under “Done (n)”
+    week: bool = False  # the plan of the week that starts on `date` (a Monday), not of one day
     attachments: list[Attachment] = field(default_factory=list)
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
@@ -223,6 +244,7 @@ class Note:
             "width": self.width,
             "height": self.height,
             "hide_done": self.hide_done,
+            "week": self.week,
             "attachments": [a.to_dict() for a in self.attachments],
             "created": self.created,
             "updated": self.updated,
@@ -231,9 +253,11 @@ class Note:
     @classmethod
     def from_dict(cls, d: dict) -> Note:
         color = str(d.get("color", ""))
+        week = bool(d.get("week", False))
+        day = str(d.get("date") or today())
         return cls(
             id=str(d.get("id") or _new_id()),
-            date=str(d.get("date") or today()),
+            date=week_start(day) if week else day,
             title=str(d.get("title", "")),
             text=str(d.get("text", "")),
             items=[NoteItem.from_dict(i) for i in d.get("items", []) if isinstance(i, dict)],
@@ -243,6 +267,7 @@ class Note:
             width=max(0, min(MAX_SIZE, int(d.get("width", 0) or 0))),
             height=max(0, min(MAX_SIZE, int(d.get("height", 0) or 0))),
             hide_done=bool(d.get("hide_done", False)),
+            week=week,
             attachments=[Attachment.from_dict(a) for a in d.get("attachments", []) if isinstance(a, dict) and a.get("path")],
             created=float(d.get("created", time.time())),
             updated=float(d.get("updated", time.time())),
@@ -261,7 +286,10 @@ class Notes:
         return next((n for n in self.notes if n.id == note_id), None)
 
     def add(self, date: str | None = None, **kw) -> Note:
-        note = Note(date=date or today(), **kw)
+        """A new card on a day; with `week=True` — a plan of the week of that day (kept on
+        its Monday)."""
+        day = date or today()
+        note = Note(date=week_start(day) if kw.get("week") else day, **kw)
         self.notes.append(note)
         return note
 
@@ -270,20 +298,40 @@ class Notes:
             self.notes.remove(note)
 
     def dates(self) -> list[str]:
-        """Days that have notes, newest first."""
-        return sorted({n.date for n in self.notes}, reverse=True)
+        """Days that have notes, newest first (a week plan belongs to no day)."""
+        return sorted({n.date for n in self.notes if not n.week}, reverse=True)
 
     def for_day(self, date: str) -> list[Note]:
-        return self.sort([n for n in self.notes if n.date == date])
+        return self.sort([n for n in self.notes if n.date == date and not n.week])
+
+    def weeks(self) -> list[str]:
+        """Mondays of the weeks that have notes — plans of the week or cards of its days —
+        newest first."""
+        return sorted({week_start(n.date) for n in self.notes}, reverse=True)
+
+    def for_week(self, date: str) -> list[Note]:
+        """The plans of the week of `date` (any day of it), not the cards of its days."""
+        monday = week_start(date)
+        return self.sort([n for n in self.notes if n.week and n.date == monday])
+
+    def week_progress(self, date: str) -> tuple[int, int]:
+        """(done, total) over the items of the week's plans."""
+        done = total = 0
+        for n in self.for_week(date):
+            d, t = n.progress()
+            done += d
+            total += t
+        return done, total
 
     def search(self, query: str) -> list[Note]:
-        """Across all days: title, text, items, file names. Newest days first."""
+        """Across all days and weeks: title, text, items, file names. Newest days first."""
         return self._sort_across_days([n for n in self.notes if n.matches(query)])
 
     def _sort_across_days(self, notes: list[Note]) -> list[Note]:
+        """Newest days first; the plans of a week go before the days of that week."""
         out: list[Note] = []
-        for date in sorted({n.date for n in notes}, reverse=True):
-            out.extend(self.sort([n for n in notes if n.date == date]))
+        for date, week in sorted({(n.date, n.week) for n in notes}, key=lambda k: (week_start(k[0]), k[1], k[0]), reverse=True):
+            out.extend(self.sort([n for n in notes if n.date == date and n.week == week]))
         return out
 
     def unfinished(self) -> list[Note]:
@@ -312,12 +360,13 @@ class Notes:
 
     def carry_over(self, note: Note, date: str | None = None) -> Note | None:
         """Undone items of a note → a new card on the given day (today by default), with the
-        same colour, width and files. The source note is left untouched. Nothing to carry → None."""
+        same colour, width and files; a week plan — into a plan of the week of that day. The
+        source note is left untouched. Nothing to carry → None."""
         undone = note.undone_items()
         if not undone:
             return None
         target = date or today()
-        copy = self.add(target, title=note.title, color=note.color, span=note.span, width=note.width, height=note.height)
+        copy = self.add(target, title=note.title, color=note.color, span=note.span, width=note.width, height=note.height, week=note.week)
         copy.attachments = [Attachment(a.path) for a in note.attachments]
         for item in undone:
             copy.add_item(item.text)

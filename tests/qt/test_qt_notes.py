@@ -253,6 +253,57 @@ class NoteCardTest(unittest.TestCase):
         viewer.close()
 
 
+class WeekViewTest(unittest.TestCase):
+    """A week on the left shows its plans and the cards of its seven days, each with a “+”."""
+
+    def setUp(self):
+        reset_globals()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.win = open_window(self.tmp.name)
+        notes = self.win.vault.notes
+        self.plan = notes.add(today(), week=True, title="week plan")
+        self.day = notes.add(today(), title="today's card")
+        self.win.session.touch("notes")
+        self.win.show_page("notes")
+        pump()
+        self.page = self.win.page("notes")
+        self.key = notes_page.week_key(today())
+
+    def tearDown(self):
+        close_window(self.win)
+        self.tmp.cleanup()
+        reset_globals()
+
+    def keys(self) -> list[str]:
+        return [self.page.days.item(i).data(notes_page.KEY_ROLE) for i in range(self.page.days.count())]
+
+    def test_the_week_is_on_the_left_above_its_days(self):
+        keys = self.keys()
+        self.assertLess(keys.index(self.key), keys.index(today()))
+        self.page.refresh_days()
+        self.assertEqual(list(self.page.cards), [self.day.id], "a day shows its own cards, not the week's plans")
+
+    def test_the_week_shows_plans_and_days_and_adds_into_each(self):
+        self.page.refresh_days(select=self.key)
+        pump()
+        groups = self.page.groups
+        self.assertEqual(len(groups), 8, "the plans and seven days")
+        self.assertEqual(groups[0].notes, [self.plan])
+        self.assertIn(self.day, [n for g in groups[1:] for n in g.notes])
+        self.assertTrue(all(g.header is not None for g in groups))
+        card = self.page.new_note()
+        self.assertTrue(card.note.week, "“+ Note” in a week adds a plan")
+        sunday = notes_page.week_days(today())[-1]
+        card = self.page.new_note(date=sunday, week=False)
+        self.assertEqual((card.note.date, card.note.week), (sunday, False))
+        self.assertEqual(self.page.nday, self.key, "the week stays on screen")
+        self.assertIn(card.note, self.page.groups[7].notes)
+
+    def test_quick_open_of_a_plan_opens_its_week(self):
+        self.assertEqual(notes_page.note_key(self.plan), self.key)
+        self.assertEqual(notes_page.note_key(self.day), today())
+
+
 class NotesSpeedTest(unittest.TestCase):
     """A busy day: 16 cards, 120 items, a 30 KB note. Only a gross slowdown fails here; tests/bench_qt_tabs.py prints the numbers."""
 
