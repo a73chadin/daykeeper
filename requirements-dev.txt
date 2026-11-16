@@ -5,4 +5,4 @@ ruff==0.17.1
 mypy==2.4.0
 pip-audit==2.10.1
 # property-based tests (tests/test_properties.py); the suite skips them when it is missing
-hypothesis==6.170.0
+hypothesis==6.170.12
