@@ -99,6 +99,26 @@ Settings → Data:
 
 ## 6. Journal
 
+**Confirmed delivery from assistants.** `daykeeper-cli manual APP-101` and
+`daykeeper-cli auto APP-101` wait up to ten seconds for the app to save the event.
+Both the app and the helper must support delivery receipts. `journal: saved` and
+exit code 0 confirm the save; `inbox: +1` alone confirms only enqueueing.
+Exit code 2 means rejected or unconfirmed delivery: keep the work's journal step
+unfinished, unlock the app and inspect the correct day. Do not repeatedly enqueue
+the same event just because confirmation timed out. `--wait 30` changes the wait
+(maximum 60 seconds); `--wait 0` explicitly requests enqueue-only operation.
+Other event types retain enqueue-only behavior unless `--wait` is supplied.
+When both the cases and their new autotests were authored, use
+`daykeeper-cli coverage APP-101` to send and confirm both outcomes with one command.
+It attempts both deliveries and returns a nonzero code if either is unconfirmed.
+
+Record manual cases and new autotests independently, using the date on which each
+outcome was completed. A locally completed autotest is an `auto` outcome even if
+publishing its MR still awaits permission. An opened MR does not replace that event.
+Updating an existing autotest belongs to its work-note theme, not new-test authoring.
+Before completing authoring, check every task with newly written cases/tests and
+confirm the corresponding event; a case count is not the number of journal events.
+
 The "Journal" tab. On the left — days (the numbers are the counts of the columns, the tip
 over the list names them), on the right — the day card. The columns and the kinds of
 activity come from the journal layout: Settings → Journal (a tester, a developer, an

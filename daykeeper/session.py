@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .export import export_csv, export_text
 from .i18n import _, detect_system_language
-from .journal import claim_inbox, inbox_path_for, merge_inbox, read_inbox
+from .journal import claim_inbox, inbox_path_for, is_work, merge_inbox, prune_receipts, read_inbox
 from .revisions import Revisions
 from .settings import Links, read_settings, readable, settings_path_for, write_settings
 from .vault import MAGICS, Vault, default_vault_path, write_private
@@ -181,6 +181,7 @@ class Session:
         OSError comes through, with the claimed file left for the next pull."""
         if self.vault is None:
             return None
+        prune_receipts(self.inbox_path)
         try:
             claimed = claim_inbox(self.inbox_path)
             items = [item for path in claimed for item in read_inbox(path)]
@@ -192,6 +193,20 @@ class Session:
             return None
         added = merge_inbox(self.vault.journal, items, self.links().work_hosts)
         self.vault.save()
+        # A receipt is written only after the vault save succeeds. Filtered events and
+        # events moved by column exclusivity must never receive a success receipt.
+        for item in items:
+            if not item.receipt:
+                continue
+            day = self.vault.journal.get(item.date)
+            present = day is not None and (
+                any(a["kind"] == item.kind and a["text"] == item.item for a in day.activities)
+                if item.section == "activity" else item.item in day.columns.get(item.section, [])
+            )
+            accepted = is_work(item.origin, self.links().work_hosts) and present
+            folder = self.inbox_path.with_name(self.inbox_path.name + "-receipts")
+            folder.mkdir(parents=True, exist_ok=True)
+            write_private(folder / (item.receipt + ".json"), json.dumps({"saved": bool(accepted)}).encode("utf-8"))
         for path in claimed:
             path.unlink(missing_ok=True)
         return added, len(items)
