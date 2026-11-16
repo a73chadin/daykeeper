@@ -327,6 +327,18 @@ class InboxItem:
     kind: str = ""  # activity category
     note: str = ""
     origin: str = ""  # git host of the folder the writer ran in; "" — unknown, counts as work
+    receipt: str = ""  # unique delivery token; never journal content
+
+
+def prune_receipts(inbox: Path) -> None:
+    """Expired waiters cannot collect their receipts; retain at most seven days."""
+    folder = inbox.with_name(inbox.name + "-receipts")
+    try:
+        for path in folder.glob("*.json"):
+            if re.fullmatch(r"[a-f0-9]{32}-[0-9]{1,8}\.json", path.name) and time.time() - path.stat().st_mtime > 7 * 86400:
+                path.unlink(missing_ok=True)
+    except OSError:
+        pass  # housekeeping must not block journal import
 
 
 def repo_host(folder: str | Path | None = None) -> str:
@@ -349,7 +361,7 @@ def is_work(origin: str, work_hosts: set[str]) -> bool:
     return not origin or not work_hosts or origin in work_hosts
 
 
-def append_inbox(path: Path, status: str, items: list[str], date: str | None = None, note: str = "", origin: str | None = None) -> int:
+def append_inbox(path: Path, status: str, items: list[str], date: str | None = None, note: str = "", origin: str | None = None, receipt: str = "") -> int:
     """Writer for scripts and sessions: one JSON line per item. Returns the number written.
     `status` — a column or activity word of the journal layout (`pass`, `review`, `note`…);
     `origin` — where the work was done (see repo_host); None — the current folder's repository."""
@@ -361,12 +373,14 @@ def append_inbox(path: Path, status: str, items: list[str], date: str | None = N
     where, ident = resolved
     if origin is None:
         origin = repo_host()
-    rows = []
+    rows: list[dict] = []
     for x in items:
         text = normalize_activity(ident, x) if where == "activity" else normalize_item(x)
         if text:
             row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "date": date or today(), "note": note, "origin": origin, "item": text}
             row.update({"status": "activity", "kind": ident} if where == "activity" else {"status": ident, "kind": ""})
+            if receipt:
+                row["receipt"] = f"{receipt}-{len(rows)}"
             rows.append(row)
     if not rows:
         return 0
@@ -419,12 +433,15 @@ def read_inbox(path: Path) -> list[InboxItem]:
         kind = str(row.get("kind", ""))
         date = str(row.get("date") or today())
         origin = str(row.get("origin", "")).lower()
+        receipt = str(row.get("receipt", ""))
+        if not re.fullmatch(r"[a-f0-9]{32}-[0-9]{1,8}", receipt):
+            receipt = ""
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
             continue
         if status == "activity":
             item = normalize_activity(kind, str(row.get("item", "")))
             if item and kind:
-                items.append(InboxItem(date, "activity", item, kind, str(row.get("note", "")), origin))
+                items.append(InboxItem(date, "activity", item, kind, str(row.get("note", "")), origin, receipt))
             continue
         resolved = current_layout().resolve(status)
         section: str | None
@@ -434,7 +451,7 @@ def read_inbox(path: Path) -> list[InboxItem]:
             section = next((cid for cid in LEGACY_COLUMNS if status in ALIASES[cid]), None) or (status if re.fullmatch(r"[a-z0-9_-]{1,32}", status) else None)
         item = normalize_item(str(row.get("item", "")))
         if section and item:
-            items.append(InboxItem(date, section, item, "", str(row.get("note", "")), origin))
+            items.append(InboxItem(date, section, item, "", str(row.get("note", "")), origin, receipt))
     return items
 
 

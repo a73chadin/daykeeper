@@ -1,5 +1,16 @@
 # Changes
 
+## 2.3.3 — confirmed journal delivery
+
+**Journal**
+- Manual-case and autotest commands now wait for confirmation that the app saved
+  each event. A queued event alone no longer counts as successful delivery.
+- `daykeeper-cli coverage APP-101` records and confirms both authoring outcomes.
+- `--wait SECONDS` requests confirmation for other event types or changes the
+  timeout. A locked app, a failed save or a rejected event returns a nonzero code.
+- Confirmation files contain only delivery status. Uncollected confirmations expire
+  after seven days; existing inbox writers remain compatible.
+
 ## 2.3.2 — what a theme was about
 
 **Journal**

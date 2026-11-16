@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from .hookrules import MR_URL_RE, HookConfig, looks_secret, match, regex_probe_main, slow_rules
@@ -61,10 +62,14 @@ def inbox_main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser.add_argument("--date", help="day (YYYY-MM-DD), today by default")
     parser.add_argument("--note", default="", help="short remark")
     parser.add_argument("--inbox", type=Path, help="inbox file (next to the vault by default)")
+    parser.add_argument("--wait", type=float, default=None, metavar="SECONDS", help="wait for saved-journal confirmation (default: 10 for manual/auto, 0 otherwise; maximum 60)")
     where = parser.add_mutually_exclusive_group()
     where.add_argument("--work", action="store_true", help="count as work whatever folder this runs in")
     where.add_argument("--personal", action="store_true", help="a personal project: keep it out of the journal")
     args = parser.parse_args(argv)
+    wait = args.wait if args.wait is not None else (10.0 if args.status in ("manual", "auto") else 0.0)
+    if not 0 <= wait <= 60:
+        parser.error("--wait must be between 0 and 60 seconds")
     if resolve_known(args.status, layout) is None:
         parser.error(f"status must be one of: {', '.join(words)}")
     origin = "" if args.work else "personal" if args.personal else None
@@ -72,7 +77,8 @@ def inbox_main(argv: list[str] | None = None, prog: str | None = None) -> int:
     secret = [x for x in [*args.items, args.note] if looks_secret(x)]
     if secret:  # the inbox and the journal are plain text: a token typed into a note would sit there in the clear
         parser.error("this looks like a token or a key, and the journal is not the place for one: " + ", ".join(w[:8] + "…" for w in secret))
-    n = append_inbox(path, args.status, args.items, date=args.date, note=args.note, origin=origin)
+    receipt = uuid.uuid4().hex if wait else ""
+    n = append_inbox(path, args.status, args.items, date=args.date, note=args.note, origin=origin, receipt=receipt)
     print(f"inbox: +{n} ({args.status}) -> {path}")
     resolved = resolve_known(args.status, layout)
     if resolved and resolved[0] == "activity" and layout.role(resolved[1]) == ROLE_NOTE and layout.themes:
@@ -82,7 +88,37 @@ def inbox_main(argv: list[str] | None = None, prog: str | None = None) -> int:
         long = [x for x in args.items if len((split_note(x, layout.themes) or ("", ""))[1].split()) > SUBJECT_WORDS]
         if long:  # kept, but a sentence after the theme is the mess the themes were for
             print(f"the subject is longer than {SUBJECT_WORDS} words, cut it to what the work was about: " + "; ".join(long), file=sys.stderr)
+    if n and wait:
+        return wait_for_receipts(path, receipt, n, wait)
     return 0 if n else 1
+
+
+def wait_for_receipts(inbox: Path, token: str, count: int, timeout: float) -> int:
+    """Only the saving app can acknowledge delivery; an empty inbox proves nothing."""
+    folder = inbox.with_name(inbox.name + "-receipts")
+    pending = {folder / f"{token}-{i}.json" for i in range(count)}
+    deadline = time.monotonic() + timeout
+    while pending:
+        for path in list(pending):
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass  # cleanup cannot undo the app's successful save
+            if not isinstance(row, dict) or row.get("saved") is not True:
+                print("not saved: the app rejected a journal event", file=sys.stderr)
+                return 2
+            pending.remove(path)
+        if pending:
+            if time.monotonic() >= deadline:
+                print("not confirmed: delivery is pending; unlock the updated app and check the journal before completing the work", file=sys.stderr)
+                return 2
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+    print(f"journal: saved {count} event(s)")
+    return 0
 
 
 # ---- hook: is this MR mine?
@@ -246,4 +282,8 @@ def main(argv: list[str] | None = None) -> int:
         return hook_main()
     if argv[:1] == ["regex-probe"]:
         return regex_probe_main()
+    if argv[:1] == ["coverage"]:
+        # Complete both authoring outcomes even if one delivery is still pending.
+        results = [inbox_main([status, *argv[1:]], prog="daykeeper-cli coverage") for status in ("manual", "auto")]
+        return max(results)
     return inbox_main(argv, prog="daykeeper-cli")
